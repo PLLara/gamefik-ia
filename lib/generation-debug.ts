@@ -44,6 +44,20 @@ export type DebugStreamChunk = {
   textDelta: string
 }
 
+export type DebugWorkflowStage = {
+  stage: "router" | "planner" | "reviewer"
+  index: number
+  model: string
+  startedAt: string
+  durationMs: number
+  promptText: string
+  responseText: string | null
+  parsedJson: unknown
+  usageMetadata: DebugUsageMetadata
+  success: boolean
+  error: string | null
+}
+
 export type DebugGenerationAttempt = {
   attemptNumber: number
   startedAt: string
@@ -77,7 +91,9 @@ export type GenerationDebugPayload = {
   startedAt: string
   completedAt: string | null
   totalDurationMs: number | null
+  workflowStages: DebugWorkflowStage[]
   attempts: DebugGenerationAttempt[]
+  finalOperation: unknown
   finalNormalizedPayload: unknown
   finalActivity: Activity | null
   finalError: string | null

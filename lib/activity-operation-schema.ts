@@ -390,10 +390,8 @@ export const activityOperationJsonSchema = {
                     items: {
                       type: "object",
                       additionalProperties: false,
-                      required: ["id", "label", "text", "correct"],
+                      required: ["text", "correct"],
                       properties: {
-                        id: { type: "string" },
-                        label: { type: "string" },
                         text: { type: "string" },
                         correct: { type: "boolean" },
                       },
@@ -432,10 +430,8 @@ export const activityOperationJsonSchema = {
                   items: {
                     type: "object",
                     additionalProperties: false,
-                    required: ["id", "label", "text", "correct"],
+                    required: ["text", "correct"],
                     properties: {
-                      id: { type: "string" },
-                      label: { type: "string" },
                       text: { type: "string" },
                       correct: { type: "boolean" },
                     },

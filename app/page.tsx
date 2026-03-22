@@ -28,6 +28,10 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { FilterDropdown } from "@/components/filter-dropdown"
+import {
+  applyActivityOperation,
+  type ActivityOperation,
+} from "@/lib/activity-operation-schema"
 import { cn } from "@/lib/utils"
 import {
   activitySchema,
@@ -70,13 +74,23 @@ type UploadedAttachment = {
 }
 
 type GenerationResponsePayload = {
+  operation?: ActivityOperation
   activity?: unknown
+  assistantMessage?: string
   error?: string
   model?: string
   debug?: GenerationDebugPayload
 }
 
 type StreamingGenerationEvent =
+  | {
+      type: "phase_update"
+      data: {
+        phase: "router" | "planner" | "executor" | "reviewer" | "patch" | "clarification"
+        model: string | null
+        message: string
+      }
+    }
   | {
       type: "session"
       data: {
@@ -116,7 +130,9 @@ type StreamingGenerationEvent =
   | {
       type: "final_result"
       data: {
+        operation: ActivityOperation
         activity: unknown
+        assistantMessage: string
         model: string
         debug: GenerationDebugPayload | null
       }
@@ -490,6 +506,17 @@ export default function HomePage() {
     try {
       const formData = new FormData()
       formData.append("prompt", prompt)
+      formData.append(
+        "recentMessages",
+        JSON.stringify(messages.slice(-6).map((entry) => ({
+          role: entry.role,
+          content: entry.content,
+        })))
+      )
+
+      if (currentActivity) {
+        formData.append("currentActivity", JSON.stringify(currentActivity))
+      }
 
       attachments.forEach((attachment) => {
         formData.append("attachments", attachment.file, attachment.name)
@@ -509,6 +536,13 @@ export default function HomePage() {
 
       await readStreamingEvents(response, (streamEvent) => {
         switch (streamEvent.type) {
+          case "phase_update":
+            setStreamingPreviewText((previousText) =>
+              `${previousText}${
+                previousText.length > 0 ? "\n\n" : ""
+              }[${streamEvent.data.phase}] ${streamEvent.data.message}\n`
+            )
+            break
           case "session":
             setCurrentModel(streamEvent.data.model)
             break
@@ -528,7 +562,9 @@ export default function HomePage() {
             break
           case "final_result":
             finalPayload = {
+              operation: streamEvent.data.operation,
               activity: streamEvent.data.activity,
+              assistantMessage: streamEvent.data.assistantMessage,
               model: streamEvent.data.model,
               debug: streamEvent.data.debug ?? undefined,
             }
@@ -579,7 +615,25 @@ export default function HomePage() {
         throw new Error("Nao foi possivel concluir a geracao em streaming.")
       }
 
-      const generatedActivity = activitySchema.parse(resolvedPayload.activity)
+      if (resolvedPayload.operation?.action === "ask_clarification") {
+        setGenerationState("idle")
+        setStreamingPreviewText("")
+        setStreamingPreviewAttempt(null)
+        setStreamingPreviewModel(null)
+        replaceAssistantMessage(
+          pendingMessageId,
+          resolvedPayload.assistantMessage ?? "Preciso de mais detalhes para continuar."
+        )
+        if (resolvedPayload.debug && isLocalDebugMode) {
+          setShowDebugPanel(true)
+        }
+        return
+      }
+
+      const generatedActivity =
+        currentActivity && resolvedPayload.operation
+          ? activitySchema.parse(applyActivityOperation(currentActivity, resolvedPayload.operation))
+          : activitySchema.parse(resolvedPayload.activity)
 
       setCurrentActivity(generatedActivity)
       setCurrentQuestion(0)
@@ -592,7 +646,10 @@ export default function HomePage() {
       setStreamingPreviewText("")
       setStreamingPreviewAttempt(null)
       setStreamingPreviewModel(null)
-      replaceAssistantMessage(pendingMessageId, generatedActivity.teacherMessage)
+      replaceAssistantMessage(
+        pendingMessageId,
+        resolvedPayload.assistantMessage ?? generatedActivity.teacherMessage
+      )
       toast.success("Atividade gerada com sucesso.")
       if (resolvedPayload.debug && isLocalDebugMode) {
         setShowDebugPanel(true)
@@ -1159,6 +1216,78 @@ export default function HomePage() {
                           </pre>
                         </div>
                       </div>
+                    </section>
+
+                    <section className="rounded-2xl border border-border bg-card p-4">
+                      <h3 className="mb-3 text-sm font-semibold text-foreground">
+                        Workflow de decisao da IA
+                      </h3>
+                      {latestGenerationDebug.workflowStages.length === 0 ? (
+                        <div className="rounded-xl bg-muted px-3 py-3 text-sm text-muted-foreground">
+                          Nenhuma etapa estruturada registrada.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {latestGenerationDebug.workflowStages.map((stage) => (
+                            <details
+                              key={`${stage.stage}-${stage.index}`}
+                              className="overflow-hidden rounded-xl border border-border bg-background"
+                              open={stage.index === latestGenerationDebug.workflowStages.length}
+                            >
+                              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-foreground">
+                                <span>
+                                  {stage.index}. {stage.stage} · {stage.model}
+                                </span>
+                                <span className="text-xs font-medium text-muted-foreground">
+                                  {stage.durationMs} ms · {stage.success ? "ok" : "falhou"}
+                                </span>
+                              </summary>
+                              <div className="space-y-3 border-t border-border px-4 py-4">
+                                <div>
+                                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                    Prompt
+                                  </p>
+                                  <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                    {stage.promptText}
+                                  </pre>
+                                </div>
+                                <div>
+                                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                    Resposta bruta
+                                  </p>
+                                  <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                    {stage.responseText ?? "n/a"}
+                                  </pre>
+                                </div>
+                                <div>
+                                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                    JSON parseado
+                                  </p>
+                                  <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                    {formatDebugJson(stage.parsedJson)}
+                                  </pre>
+                                </div>
+                                <div>
+                                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                    Usage metadata
+                                  </p>
+                                  <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                    {formatDebugJson(stage.usageMetadata)}
+                                  </pre>
+                                </div>
+                                <div>
+                                  <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                    Erro
+                                  </p>
+                                  <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                    {stage.error ?? "Nenhum"}
+                                  </pre>
+                                </div>
+                              </div>
+                            </details>
+                          ))}
+                        </div>
+                      )}
                     </section>
 
                     <section className="rounded-2xl border border-border bg-card p-4">
