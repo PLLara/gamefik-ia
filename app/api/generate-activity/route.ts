@@ -30,6 +30,41 @@ async function fileToInlinePart(file: File): Promise<Part> {
   }
 }
 
+async function requestGeminiActivity({
+  gemini,
+  promptText,
+  attachmentParts,
+  temperature = 0.2,
+}: {
+  gemini: Awaited<ReturnType<typeof getGeminiClient>>
+  promptText: string
+  attachmentParts: Part[]
+  temperature?: number
+}) {
+  const response = await gemini.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: promptText,
+          },
+          ...attachmentParts,
+        ],
+      },
+    ],
+    config: {
+      temperature,
+      responseMimeType: "application/json",
+      responseJsonSchema: activityGenerationJsonSchema,
+      systemInstruction: activityGenerationSystemInstruction,
+    },
+  })
+
+  return response.text?.trim() ?? ""
+}
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData()
@@ -80,53 +115,52 @@ export async function POST(request: Request) {
     }
 
     const gemini = await getGeminiClient()
-
-    const parts: Part[] = [
-      {
-        text: buildActivityPrompt({
-          userPrompt: normalizedPrompt,
-          attachments: files.map((file) => ({
-            name: file.name,
-            mimeType: file.type,
-            size: file.size,
-          })),
-        }),
-      },
-      ...(await Promise.all(files.map(fileToInlinePart))),
-    ]
-
-    const response = await gemini.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: [
-        {
-          role: "user",
-          parts,
-        },
-      ],
-      config: {
-        temperature: 0.7,
-        responseMimeType: "application/json",
-        responseJsonSchema: activityGenerationJsonSchema,
-        systemInstruction: activityGenerationSystemInstruction,
-      },
+    const attachmentParts = await Promise.all(files.map(fileToInlinePart))
+    const basePrompt = buildActivityPrompt({
+      userPrompt: normalizedPrompt,
+      attachments: files.map((file) => ({
+        name: file.name,
+        mimeType: file.type,
+        size: file.size,
+      })),
     })
 
-    const responseText = response.text?.trim()
+    let lastError: unknown = null
+    let previousResponseText = ""
 
-    if (!responseText) {
-      return NextResponse.json(
-        { error: "A resposta da IA veio vazia. Tente novamente com mais contexto." },
-        { status: 502 }
-      )
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const retryInstruction =
+        attempt === 0
+          ? ""
+          : `\n\nCORRECAO OBRIGATORIA:\nSua resposta anterior nao seguiu o schema esperado. Gere novamente usando apenas os campos validos.\nMantenha os nomes exatos dos campos.\nNao misture texto solto com objetos dentro do array de alternativas.\nResposta anterior invalida:\n${previousResponseText.slice(0, 3000)}`
+
+      const responseText = await requestGeminiActivity({
+        gemini,
+        promptText: `${basePrompt}${retryInstruction}`,
+        attachmentParts,
+      })
+
+      if (!responseText) {
+        lastError = new Error("A resposta da IA veio vazia. Tente novamente com mais contexto.")
+        continue
+      }
+
+      previousResponseText = responseText
+
+      try {
+        const parsedGeneration = normalizeActivityGenerationPayload(JSON.parse(responseText))
+        const normalizedActivity = activitySchema.parse(toActivityFromModel(parsedGeneration))
+
+        return NextResponse.json({
+          activity: normalizedActivity,
+          model: GEMINI_MODEL,
+        })
+      } catch (error) {
+        lastError = error
+      }
     }
 
-    const parsedGeneration = normalizeActivityGenerationPayload(JSON.parse(responseText))
-    const normalizedActivity = activitySchema.parse(toActivityFromModel(parsedGeneration))
-
-    return NextResponse.json({
-      activity: normalizedActivity,
-      model: GEMINI_MODEL,
-    })
+    throw lastError ?? new Error("Nao foi possivel gerar uma resposta valida da IA.")
   } catch (error) {
     if (error instanceof Error && error.message.includes("GEMINI_API_KEY")) {
       return NextResponse.json(

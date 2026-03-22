@@ -273,20 +273,63 @@ function normalizeQuizQuestionPayload(value: unknown) {
     return null
   }
 
-  const correctIndex = toInteger(
+  const rawCorrectIndex = toInteger(
     record.correctAlternative ??
       record.correctOption ??
       record.correctAlternativeIndex ??
-      record.correctAnswerIndex,
+      record.correctAnswerIndex ??
+      record.correct,
     -1
   )
+
+  const parseAlternativeString = (value: string) => {
+    const trimmedValue = value.trim()
+
+    if (trimmedValue.includes('"text"')) {
+      const candidateJson = trimmedValue.startsWith("{")
+        ? trimmedValue
+        : `{${trimmedValue}}`
+
+      try {
+        const parsedValue = JSON.parse(candidateJson)
+        const parsedRecord = asRecord(parsedValue)
+
+        if (parsedRecord) {
+          return {
+            text: firstString(parsedRecord.text, parsedRecord.label, parsedRecord.option),
+            correct:
+              typeof parsedRecord.correct === "boolean"
+                ? parsedRecord.correct
+                : typeof parsedRecord.isCorrect === "boolean"
+                  ? parsedRecord.isCorrect
+                  : null,
+          }
+        }
+      } catch {
+        return {
+          text: trimmedValue,
+          correct: null,
+        }
+      }
+    }
+
+    return {
+      text: trimmedValue,
+      correct: null,
+    }
+  }
 
   const alternatives = rawAlternatives
     .map((alternative, index) => {
       if (typeof alternative === "string" && alternative.trim().length > 0) {
+        const parsedStringAlternative = parseAlternativeString(alternative)
+
         return {
-          text: alternative.trim(),
-          correct: index === correctIndex,
+          text: parsedStringAlternative.text ?? alternative.trim(),
+          correct:
+            parsedStringAlternative.correct !== null
+              ? parsedStringAlternative.correct
+              : index === rawCorrectIndex,
         }
       }
 
@@ -312,7 +355,7 @@ function normalizeQuizQuestionPayload(value: unknown) {
           ? alternativeRecord.correct
           : typeof alternativeRecord.isCorrect === "boolean"
             ? alternativeRecord.isCorrect
-            : index === correctIndex
+            : index === rawCorrectIndex
 
       return {
         text,
@@ -321,19 +364,23 @@ function normalizeQuizQuestionPayload(value: unknown) {
     })
     .filter((alternative): alternative is { text: string; correct: boolean } => alternative !== null)
 
-  if (alternatives.length < 2) {
+  const boundedAlternatives = alternatives.slice(0, 6)
+
+  if (boundedAlternatives.length < 2) {
     return null
   }
 
-  const firstCorrectIndex = alternatives.findIndex((alternative) => alternative.correct)
+  const firstCorrectIndex = boundedAlternatives.findIndex((alternative) => alternative.correct)
   const normalizedCorrectIndex =
-    correctIndex >= 0 && correctIndex < alternatives.length
-      ? correctIndex
+    rawCorrectIndex >= 0 && rawCorrectIndex < boundedAlternatives.length
+      ? rawCorrectIndex
+      : rawCorrectIndex > 0 && rawCorrectIndex - 1 < boundedAlternatives.length
+        ? rawCorrectIndex - 1
       : firstCorrectIndex >= 0
         ? firstCorrectIndex
         : 0
 
-  const normalizedAlternatives = alternatives.map((alternative, index) => ({
+  const normalizedAlternatives = boundedAlternatives.map((alternative, index) => ({
     text: alternative.text,
     correct: index === normalizedCorrectIndex,
   }))

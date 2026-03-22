@@ -32,6 +32,7 @@ Regras obrigatorias:
 - em quiz, cada alternativa deve ser um objeto com os campos "text" e "correct";
 - em quiz, crie entre 3 e 6 questoes relevantes, cada uma com exatamente uma alternativa correta;
 - em quiz, varie o texto das alternativas e evite respostas ambiguas;
+- em quiz, verifique se a alternativa marcada como correta esta cientificamente correta;
 - em missao, escolha "missionProofType" e "missionValidation" coerentes com a tarefa proposta;
 - nunca use nomes alternativos como "activityType", "questions", "questionText" ou "correctAlternative";
 - nunca invente campos fora do schema.
