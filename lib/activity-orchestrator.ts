@@ -232,7 +232,7 @@ async function callStructuredModel<T>({
     }
   }
 
-  throw lastError ?? new Error("Falha ao obter resposta estruturada do Gemini.")
+  throw lastError ?? new Error("Falha ao obter resposta estruturada da IA.")
 }
 
 async function callExecutorStream({

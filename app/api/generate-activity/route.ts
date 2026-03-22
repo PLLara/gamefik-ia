@@ -147,7 +147,7 @@ function resolveError(error: unknown) {
     return {
       status: 500,
       error:
-        "A chave da API do Gemini nao foi configurada. Defina GEMINI_API_KEY antes de gerar atividades.",
+        "A chave da API de IA nao foi configurada. Defina GEMINI_API_KEY antes de gerar atividades.",
       details: null,
     }
   }

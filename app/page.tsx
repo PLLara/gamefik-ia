@@ -200,47 +200,99 @@ function formatDebugJson(value: unknown) {
   }
 }
 
+function getModelDisplayName(
+  rawModel: string | null | undefined,
+  debugPayload: GenerationDebugPayload | null
+) {
+  if (!rawModel) {
+    return "n/a"
+  }
+
+  if (rawModel === debugPayload?.fallbackModel) {
+    return "modelo de reserva"
+  }
+
+  if (rawModel === debugPayload?.model || rawModel === debugPayload?.finalModel) {
+    return "modelo principal"
+  }
+
+  return "modelo de IA"
+}
+
+function sanitizeProviderText(value: string) {
+  return value
+    .replace(/gemini-3\.1-pro-preview/gi, "modelo principal")
+    .replace(/gemini-2\.5-flash/gi, "modelo de reserva")
+    .replace(/gemini/gi, "modelo de IA")
+}
+
+function sanitizeDebugValue(value: unknown, debugPayload: GenerationDebugPayload | null): unknown {
+  if (typeof value === "string") {
+    return sanitizeProviderText(value)
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeDebugValue(item, debugPayload))
+  }
+
+  if (value && typeof value === "object") {
+    const sanitizedEntries = Object.entries(value).map(([key, entryValue]) => {
+      if (key === "model" || key === "finalModel" || key === "fallbackModel" || key === "modelVersion") {
+        return [key, getModelDisplayName(String(entryValue ?? ""), debugPayload)]
+      }
+
+      return [key, sanitizeDebugValue(entryValue, debugPayload)]
+    })
+
+    return Object.fromEntries(sanitizedEntries)
+  }
+
+  return value
+}
+
 function formatDebugReport(debugPayload: GenerationDebugPayload | null) {
   if (!debugPayload) {
     return "Ainda nao ha logs. Gere uma atividade para popular este painel."
   }
 
+  const sanitizedPayload = sanitizeDebugValue(debugPayload, debugPayload) as GenerationDebugPayload
+
   return [
     "=== DEBUG IA ===",
     "",
-    `Modelo configurado: ${debugPayload.model}`,
-    `Modelo final: ${debugPayload.finalModel ?? "n/a"}`,
-    `Fallback: ${debugPayload.fallbackModel ?? "n/a"}`,
-    `API version: ${debugPayload.apiVersion}`,
-    `Host: ${debugPayload.requestHost ?? "n/a"}`,
-    `Inicio: ${debugPayload.startedAt}`,
-    `Conclusao: ${debugPayload.completedAt ?? "n/a"}`,
-    `Duracao total: ${debugPayload.totalDurationMs ?? "n/a"} ms`,
-    `Erro final: ${debugPayload.finalError ?? "Nenhum"}`,
+    `Modelo configurado: ${sanitizedPayload.model}`,
+    `Modelo final: ${sanitizedPayload.finalModel ?? "n/a"}`,
+    `Fallback: ${sanitizedPayload.fallbackModel ?? "n/a"}`,
+    `API version: ${sanitizedPayload.apiVersion}`,
+    `Host: ${sanitizedPayload.requestHost ?? "n/a"}`,
+    `Inicio: ${sanitizedPayload.startedAt}`,
+    `Conclusao: ${sanitizedPayload.completedAt ?? "n/a"}`,
+    `Duracao total: ${sanitizedPayload.totalDurationMs ?? "n/a"} ms`,
+    `Erro final: ${sanitizedPayload.finalError ?? "Nenhum"}`,
     "",
     "=== ANEXOS ===",
-    formatDebugJson(debugPayload.attachmentSummary),
+    formatDebugJson(sanitizedPayload.attachmentSummary),
     "",
     "=== PROMPT BASE ===",
-    debugPayload.basePrompt || "n/a",
+    sanitizedPayload.basePrompt || "n/a",
     "",
     "=== SYSTEM INSTRUCTION ===",
-    debugPayload.systemInstruction || "n/a",
+    sanitizedPayload.systemInstruction || "n/a",
     "",
     "=== WORKFLOW STAGES ===",
-    formatDebugJson(debugPayload.workflowStages),
+    formatDebugJson(sanitizedPayload.workflowStages),
     "",
     "=== ATTEMPTS ===",
-    formatDebugJson(debugPayload.attempts),
+    formatDebugJson(sanitizedPayload.attempts),
     "",
     "=== FINAL OPERATION ===",
-    formatDebugJson(debugPayload.finalOperation),
+    formatDebugJson(sanitizedPayload.finalOperation),
     "",
     "=== FINAL NORMALIZED PAYLOAD ===",
-    formatDebugJson(debugPayload.finalNormalizedPayload),
+    formatDebugJson(sanitizedPayload.finalNormalizedPayload),
     "",
     "=== FINAL ACTIVITY ===",
-    formatDebugJson(debugPayload.finalActivity),
+    formatDebugJson(sanitizedPayload.finalActivity),
   ].join("\n")
 }
 
@@ -402,7 +454,7 @@ export default function HomePage() {
       {
         id: pendingMessageId,
         role: "ai",
-        content: "Gerando atividade com o Gemini...",
+        content: "Gerando atividade com a IA...",
       },
     ])
     setGenerationState("loading")
@@ -460,8 +512,8 @@ export default function HomePage() {
             setStreamingPreviewModel(streamEvent.data.model)
             setStreamingPreviewText((previousText) =>
               previousText.length > 0
-                ? `${previousText}\n\n---- Tentativa ${streamEvent.data.attemptNumber} · ${streamEvent.data.model} ----\n`
-                : `---- Tentativa ${streamEvent.data.attemptNumber} · ${streamEvent.data.model} ----\n`
+                ? `${previousText}\n\n---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug)} ----\n`
+                : `---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug)} ----\n`
             )
             break
           case "preview_delta":
@@ -830,12 +882,12 @@ export default function HomePage() {
           ) : null}
           {streamingPreviewModel ? (
             <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-              {streamingPreviewModel}
+              {getModelDisplayName(streamingPreviewModel, latestGenerationDebug)}
             </span>
           ) : null}
         </div>
         <pre className="max-h-72 overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
-          {streamingPreviewText || "Aguardando os primeiros tokens do Gemini..."}
+          {streamingPreviewText || "Aguardando os primeiros tokens da IA..."}
         </pre>
       </div>
     )
@@ -1389,7 +1441,7 @@ export default function HomePage() {
       <div className="relative z-10 flex w-full max-w-2xl flex-col items-center px-3 md:max-w-3xl md:px-4">
         <div className="chat-hero-animate mb-5 inline-flex items-center gap-2 rounded-full border border-primary/25 bg-card/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-primary shadow-gamefik backdrop-blur-md">
           <Sparkles className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-          Gamefik IA + Gemini
+          Gamefik IA
         </div>
 
         <h1 className="chat-hero-animate chat-hero-delay-1 font-heading mb-3 max-w-[20ch] text-center text-3xl font-bold leading-tight tracking-tight text-foreground drop-shadow-[0_2px_24px_rgba(0,0,0,0.12)] md:max-w-none md:text-4xl">
@@ -1400,7 +1452,7 @@ export default function HomePage() {
         </h1>
 
         <p className="chat-hero-animate chat-hero-delay-2 mb-7 max-w-xl text-center text-sm font-medium leading-relaxed text-muted-foreground drop-shadow-sm md:text-[0.9375rem]">
-          Descreva um tema, cole um texto ou anexe material. O Gemini gera um quiz ou uma missao prontos para editar, salvar e publicar.
+          Descreva um tema, cole um texto ou anexe material. A IA gera um quiz ou uma missao prontos para editar e salvar.
         </p>
 
         <form onSubmit={handleSubmit} className="chat-hero-animate chat-hero-delay-3 relative z-20 w-full">
@@ -1482,7 +1534,9 @@ export default function HomePage() {
                     className="hidden"
                   />
                   <span className="hidden text-xs text-muted-foreground sm:inline">
-                    {currentModel ? `Ultimo modelo: ${currentModel}` : "Gemini conectado"}
+                    {currentModel
+                      ? `Modelo ativo: ${getModelDisplayName(currentModel, latestGenerationDebug)}`
+                      : "IA conectada"}
                   </span>
                 </div>
 
@@ -1934,7 +1988,7 @@ export default function HomePage() {
               Gere uma atividade para visualizar
             </h3>
             <p className="text-sm text-muted-foreground">
-              Assim que o Gemini responder, a pre-visualizacao do aluno aparecera aqui.
+              Assim que a IA responder, a pre-visualizacao do aluno aparecera aqui.
             </p>
           </div>
         </div>
