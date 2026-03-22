@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bug,
+  Copy,
   CheckCircle2,
   ChevronDown,
   Circle,
@@ -326,6 +327,50 @@ function formatDebugJson(value: unknown) {
   } catch {
     return String(value)
   }
+}
+
+function formatDebugReport(debugPayload: GenerationDebugPayload | null) {
+  if (!debugPayload) {
+    return "Ainda nao ha logs. Gere uma atividade para popular este painel."
+  }
+
+  return [
+    "=== DEBUG IA ===",
+    "",
+    `Modelo configurado: ${debugPayload.model}`,
+    `Modelo final: ${debugPayload.finalModel ?? "n/a"}`,
+    `Fallback: ${debugPayload.fallbackModel ?? "n/a"}`,
+    `API version: ${debugPayload.apiVersion}`,
+    `Host: ${debugPayload.requestHost ?? "n/a"}`,
+    `Inicio: ${debugPayload.startedAt}`,
+    `Conclusao: ${debugPayload.completedAt ?? "n/a"}`,
+    `Duracao total: ${debugPayload.totalDurationMs ?? "n/a"} ms`,
+    `Erro final: ${debugPayload.finalError ?? "Nenhum"}`,
+    "",
+    "=== ANEXOS ===",
+    formatDebugJson(debugPayload.attachmentSummary),
+    "",
+    "=== PROMPT BASE ===",
+    debugPayload.basePrompt || "n/a",
+    "",
+    "=== SYSTEM INSTRUCTION ===",
+    debugPayload.systemInstruction || "n/a",
+    "",
+    "=== WORKFLOW STAGES ===",
+    formatDebugJson(debugPayload.workflowStages),
+    "",
+    "=== ATTEMPTS ===",
+    formatDebugJson(debugPayload.attempts),
+    "",
+    "=== FINAL OPERATION ===",
+    formatDebugJson(debugPayload.finalOperation),
+    "",
+    "=== FINAL NORMALIZED PAYLOAD ===",
+    formatDebugJson(debugPayload.finalNormalizedPayload),
+    "",
+    "=== FINAL ACTIVITY ===",
+    formatDebugJson(debugPayload.finalActivity),
+  ].join("\n")
 }
 
 function getLatestTokenCount(debugPayload: GenerationDebugPayload | null) {
@@ -997,6 +1042,14 @@ export default function HomePage() {
     const latestAttempt =
       latestGenerationDebug?.attempts[latestGenerationDebug.attempts.length - 1] ?? null
     const latestTokenCount = getLatestTokenCount(latestGenerationDebug)
+    const handleCopyAllDebug = async () => {
+      try {
+        await navigator.clipboard.writeText(formatDebugReport(latestGenerationDebug))
+        toast.success("Debug completo copiado para a area de transferencia.")
+      } catch {
+        toast.error("Nao foi possivel copiar o debug completo.")
+      }
+    }
 
     return (
       <>
@@ -1038,13 +1091,23 @@ export default function HomePage() {
                     Visivel apenas em localhost. Aqui voce ve prompt, retries, resposta bruta, payload normalizado e telemetria.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowDebugPanel(false)}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCopyAllDebug}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-accent"
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copiar tudo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDebugPanel(false)}
+                    className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 border-b border-border px-5 py-4 md:grid-cols-4">
