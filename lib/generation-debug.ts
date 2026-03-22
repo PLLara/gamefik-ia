@@ -38,6 +38,12 @@ export type DebugCandidateSummary = {
   safetyRatings: unknown
 }
 
+export type DebugStreamChunk = {
+  chunkIndex: number
+  receivedAt: string
+  textDelta: string
+}
+
 export type DebugGenerationAttempt = {
   attemptNumber: number
   startedAt: string
@@ -50,6 +56,7 @@ export type DebugGenerationAttempt = {
   usageMetadata: DebugUsageMetadata
   promptFeedback: unknown
   candidates: DebugCandidateSummary[]
+  streamChunks: DebugStreamChunk[]
   parsedResponseJson: unknown
   normalizedPayload: unknown
   success: boolean

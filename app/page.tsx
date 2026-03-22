@@ -76,6 +76,61 @@ type GenerationResponsePayload = {
   debug?: GenerationDebugPayload
 }
 
+type StreamingGenerationEvent =
+  | {
+      type: "session"
+      data: {
+        model: string
+        fallbackModel: string | null
+        apiVersion: string
+        includeDebug: boolean
+      }
+    }
+  | {
+      type: "attempt_start"
+      data: {
+        attemptNumber: number
+        model: string
+        temperature: number
+      }
+    }
+  | {
+      type: "preview_delta"
+      data: {
+        attemptNumber: number
+        model: string
+        textDelta: string
+      }
+    }
+  | {
+      type: "attempt_complete"
+      data: {
+        attemptNumber: number
+        model: string
+        success: boolean
+        durationMs: number
+        totalTokenCount: number | null
+        normalizationError: string | null
+      }
+    }
+  | {
+      type: "final_result"
+      data: {
+        activity: unknown
+        model: string
+        debug: GenerationDebugPayload | null
+      }
+    }
+  | {
+      type: "final_error"
+      data: {
+        error: string
+        details: string | null
+        httpStatus: number
+        debug: GenerationDebugPayload | null
+      }
+    }
+
 const storageKey = "gamefik-manager.activities.v1"
 
 const welcomeMessage: ChatMessage = {
@@ -271,6 +326,50 @@ function getLatestTokenCount(debugPayload: GenerationDebugPayload | null) {
   )
 }
 
+async function readStreamingEvents(
+  response: Response,
+  onEvent: (event: StreamingGenerationEvent) => void
+) {
+  if (!response.body) {
+    return
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+
+  const flushBuffer = () => {
+    const lines = buffer.split("\n")
+    buffer = lines.pop() ?? ""
+
+    for (const line of lines) {
+      const trimmedLine = line.trim()
+
+      if (!trimmedLine) {
+        continue
+      }
+
+      onEvent(JSON.parse(trimmedLine) as StreamingGenerationEvent)
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done })
+    flushBuffer()
+
+    if (done) {
+      break
+    }
+  }
+
+  const finalLine = buffer.trim()
+
+  if (finalLine) {
+    onEvent(JSON.parse(finalLine) as StreamingGenerationEvent)
+  }
+}
+
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("initial")
   const [rightPanel, setRightPanel] = useState<RightPanelView>("editor")
@@ -293,6 +392,9 @@ export default function HomePage() {
   const [latestGenerationDebug, setLatestGenerationDebug] = useState<GenerationDebugPayload | null>(
     null
   )
+  const [streamingPreviewText, setStreamingPreviewText] = useState("")
+  const [streamingPreviewAttempt, setStreamingPreviewAttempt] = useState<number | null>(null)
+  const [streamingPreviewModel, setStreamingPreviewModel] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
@@ -381,6 +483,9 @@ export default function HomePage() {
     setGenerationState("loading")
     setGenerationError(null)
     setLatestGenerationDebug(null)
+    setStreamingPreviewText("")
+    setStreamingPreviewAttempt(null)
+    setStreamingPreviewModel(null)
 
     try {
       const formData = new FormData()
@@ -392,29 +497,89 @@ export default function HomePage() {
 
       const response = await fetch("/api/generate-activity", {
         method: "POST",
+        headers: {
+          "x-gamefik-stream-preview": "1",
+        },
         body: formData,
       })
 
-      const payload = (await response.json()) as GenerationResponsePayload
+      let finalPayload: GenerationResponsePayload | null = null
+      let streamedError: { error: string; details?: string | null; debug?: GenerationDebugPayload | null } | null =
+        null
 
-      if (payload.debug) {
-        setLatestGenerationDebug(payload.debug)
+      await readStreamingEvents(response, (streamEvent) => {
+        switch (streamEvent.type) {
+          case "session":
+            setCurrentModel(streamEvent.data.model)
+            break
+          case "attempt_start":
+            setStreamingPreviewAttempt(streamEvent.data.attemptNumber)
+            setStreamingPreviewModel(streamEvent.data.model)
+            setStreamingPreviewText((previousText) =>
+              previousText.length > 0
+                ? `${previousText}\n\n---- Tentativa ${streamEvent.data.attemptNumber} · ${streamEvent.data.model} ----\n`
+                : `---- Tentativa ${streamEvent.data.attemptNumber} · ${streamEvent.data.model} ----\n`
+            )
+            break
+          case "preview_delta":
+            setStreamingPreviewAttempt(streamEvent.data.attemptNumber)
+            setStreamingPreviewModel(streamEvent.data.model)
+            setStreamingPreviewText((previousText) => previousText + streamEvent.data.textDelta)
+            break
+          case "final_result":
+            finalPayload = {
+              activity: streamEvent.data.activity,
+              model: streamEvent.data.model,
+              debug: streamEvent.data.debug ?? undefined,
+            }
+            break
+          case "final_error":
+            streamedError = {
+              error: streamEvent.data.error,
+              details: streamEvent.data.details,
+              debug: streamEvent.data.debug,
+            }
+            break
+          default:
+            break
+        }
+      })
+
+      const resolvedPayload = finalPayload as GenerationResponsePayload | null
+      const resolvedStreamedError = streamedError as {
+        error: string
+        details?: string | null
+        debug?: GenerationDebugPayload | null
+      } | null
+
+      if (resolvedPayload?.debug) {
+        setLatestGenerationDebug(resolvedPayload.debug)
       }
 
-      if (typeof payload.model === "string" || payload.debug?.model) {
+      if (resolvedPayload?.model || resolvedPayload?.debug?.model) {
         setCurrentModel(
-          typeof payload.model === "string" ? payload.model : payload.debug?.model ?? null
+          resolvedPayload?.model ??
+            resolvedPayload?.debug?.finalModel ??
+            resolvedPayload?.debug?.model ??
+            null
         )
       }
 
-      if (!response.ok) {
-        if (payload.debug && isLocalDebugMode) {
+      if (resolvedStreamedError) {
+        if (resolvedStreamedError.debug) {
+          setLatestGenerationDebug(resolvedStreamedError.debug)
+        }
+        if (resolvedStreamedError.debug && isLocalDebugMode) {
           setShowDebugPanel(true)
         }
-        throw new Error(payload.error || "Nao foi possivel gerar a atividade.")
+        throw new Error(resolvedStreamedError.error)
       }
 
-      const generatedActivity = activitySchema.parse(payload.activity)
+      if (!resolvedPayload) {
+        throw new Error("Nao foi possivel concluir a geracao em streaming.")
+      }
+
+      const generatedActivity = activitySchema.parse(resolvedPayload.activity)
 
       setCurrentActivity(generatedActivity)
       setCurrentQuestion(0)
@@ -424,9 +589,12 @@ export default function HomePage() {
       setActiveRecordId(generatedActivity.id)
       setSelectedClassroom(classroomOptions[0])
       setGenerationState("idle")
+      setStreamingPreviewText("")
+      setStreamingPreviewAttempt(null)
+      setStreamingPreviewModel(null)
       replaceAssistantMessage(pendingMessageId, generatedActivity.teacherMessage)
       toast.success("Atividade gerada com sucesso.")
-      if (payload.debug && isLocalDebugMode) {
+      if (resolvedPayload.debug && isLocalDebugMode) {
         setShowDebugPanel(true)
       }
     } catch (error) {
@@ -437,6 +605,7 @@ export default function HomePage() {
 
       setGenerationState("error")
       setGenerationError(errorMessage)
+      setStreamingPreviewAttempt(null)
       replaceAssistantMessage(pendingMessageId, errorMessage)
       toast.error(errorMessage)
     } finally {
@@ -731,6 +900,36 @@ export default function HomePage() {
 
       toast.error(errorMessage)
     }
+  }
+
+  const renderStreamingPreviewCard = () => {
+    if (generationState !== "loading" && !streamingPreviewText) {
+      return null
+    }
+
+    return (
+      <div className="rounded-2xl border border-primary/20 bg-card/95 p-4 shadow-card backdrop-blur-sm">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+            <Sparkles className="h-3.5 w-3.5" />
+            Preview ao vivo
+          </span>
+          {streamingPreviewAttempt ? (
+            <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+              Tentativa {streamingPreviewAttempt}
+            </span>
+          ) : null}
+          {streamingPreviewModel ? (
+            <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+              {streamingPreviewModel}
+            </span>
+          ) : null}
+        </div>
+        <pre className="max-h-72 overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+          {streamingPreviewText || "Aguardando os primeiros tokens do Gemini..."}
+        </pre>
+      </div>
+    )
   }
 
   const renderDebugControls = () => {
@@ -1093,6 +1292,15 @@ export default function HomePage() {
 
                               <div>
                                 <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                  Chunks do stream
+                                </p>
+                                <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                  {formatDebugJson(attempt.streamChunks)}
+                                </pre>
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
                                   Erro de normalizacao / validacao
                                 </p>
                                 <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
@@ -1269,6 +1477,12 @@ export default function HomePage() {
             </div>
           </div>
         </form>
+
+        {(generationState === "loading" || streamingPreviewText) && (
+          <div className="chat-hero-animate chat-hero-delay-4 mt-6 w-full">
+            {renderStreamingPreviewCard()}
+          </div>
+        )}
 
         <div className="chat-hero-animate chat-hero-delay-4 mt-8 flex flex-wrap items-center justify-center gap-2">
           {quickChips.map((chip) => (
@@ -1955,6 +2169,11 @@ export default function HomePage() {
             </div>
 
             <div className="flex-1 overflow-auto p-4">
+              {renderStreamingPreviewCard() && (
+                <div className="mb-4">
+                  {renderStreamingPreviewCard()}
+                </div>
+              )}
               <div className="flex flex-col gap-4">
                 {messages.map((entry) => (
                   <div
