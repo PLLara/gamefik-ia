@@ -1,5 +1,6 @@
 import { z } from "zod"
 import {
+  activityGenerationSchema,
   activityGenerationJsonSchema,
   activitySchema,
   createEntityId,
@@ -8,6 +9,7 @@ import {
   missionProofTypeSchema,
   missionValidationSchema,
   relabelAlternatives,
+  toActivityFromModel,
   type Activity,
   type QuizQuestion,
 } from "@/lib/activity-schema"
@@ -131,7 +133,7 @@ export const activityOperationSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("full_regeneration"),
     payload: z.object({
-      activity: activitySchema,
+      activity: activityGenerationSchema,
     }),
   }),
   z.object({
@@ -164,14 +166,6 @@ export type RouterDecision = z.infer<typeof routerDecisionSchema>
 export type OperationPlanner = z.infer<typeof operationPlannerSchema>
 export type ActivityOperation = z.infer<typeof activityOperationSchema>
 
-function cloneActivity(activity: Activity) {
-  if (typeof structuredClone === "function") {
-    return structuredClone(activity)
-  }
-
-  return JSON.parse(JSON.stringify(activity)) as Activity
-}
-
 function withQuestionIdentity(
   question: z.infer<typeof quizQuestionDraftSchema>
 ): QuizQuestion {
@@ -196,7 +190,9 @@ export function applyActivityOperation(
   }
 
   if (operation.action === "full_regeneration") {
-    const nextActivity = cloneActivity(operation.payload.activity)
+    const nextActivity = activitySchema.parse(
+      toActivityFromModel(activityGenerationSchema.parse(operation.payload.activity))
+    )
 
     if (currentActivity) {
       return {
@@ -495,4 +491,192 @@ export const activityOperationJsonSchema = {
       },
     },
   ],
+}
+
+const activityGenerationLiteJsonSchema = {
+  type: "object",
+  properties: {
+    type: { type: "string" },
+    title: { type: "string" },
+    description: { type: "string" },
+    teacherMessage: { type: "string" },
+    attachmentContext: {
+      type: "array",
+      items: { type: "string" },
+    },
+    quizQuestions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          enunciado: { type: "string" },
+          points: { type: "number" },
+          alternatives: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+                correct: { type: "boolean" },
+              },
+            },
+          },
+        },
+      },
+    },
+    missionProofType: { type: "string" },
+    missionValidation: { type: "string" },
+  },
+}
+
+export function getActivityOperationJsonSchema(
+  action: z.infer<typeof activityOperationActionSchema>
+) {
+  switch (action) {
+    case "full_regeneration":
+      return {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["full_regeneration"] },
+          payload: {
+            type: "object",
+            properties: {
+              activity: activityGenerationLiteJsonSchema,
+            },
+            required: ["activity"],
+          },
+        },
+        required: ["action", "payload"],
+      }
+    case "update_metadata":
+      return {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["update_metadata"] },
+          payload: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              description: { type: "string" },
+              teacherMessage: { type: "string" },
+            },
+          },
+        },
+        required: ["action", "payload"],
+      }
+    case "append_questions":
+      return {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["append_questions"] },
+          payload: {
+            type: "object",
+            properties: {
+              questions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    enunciado: { type: "string" },
+                    points: { type: "number" },
+                    alternatives: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          text: { type: "string" },
+                          correct: { type: "boolean" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            required: ["questions"],
+          },
+        },
+        required: ["action", "payload"],
+      }
+    case "replace_question":
+      return {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["replace_question"] },
+          payload: {
+            type: "object",
+            properties: {
+              questionId: { type: "string" },
+              question: {
+                type: "object",
+                properties: {
+                  enunciado: { type: "string" },
+                  points: { type: "number" },
+                  alternatives: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        text: { type: "string" },
+                        correct: { type: "boolean" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            required: ["questionId", "question"],
+          },
+        },
+        required: ["action", "payload"],
+      }
+    case "mission_adjustment":
+      return {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["mission_adjustment"] },
+          payload: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              description: { type: "string" },
+              teacherMessage: { type: "string" },
+              missionProofType: { type: "string" },
+              missionValidation: { type: "string" },
+            },
+          },
+        },
+        required: ["action", "payload"],
+      }
+    case "remove_question":
+      return {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["remove_question"] },
+          payload: {
+            type: "object",
+            properties: {
+              questionId: { type: "string" },
+            },
+            required: ["questionId"],
+          },
+        },
+        required: ["action", "payload"],
+      }
+    case "ask_clarification":
+      return {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["ask_clarification"] },
+          payload: {
+            type: "object",
+            properties: {
+              question: { type: "string" },
+            },
+            required: ["question"],
+          },
+        },
+        required: ["action", "payload"],
+      }
+  }
 }

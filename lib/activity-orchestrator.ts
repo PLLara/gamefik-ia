@@ -1,9 +1,9 @@
 import type { Part } from "@google/genai"
 import { z } from "zod"
 import {
-  activityOperationJsonSchema,
   activityOperationSchema,
   applyActivityOperation,
+  getActivityOperationJsonSchema,
   operationPlannerJsonSchema,
   operationPlannerSchema,
   routerDecisionJsonSchema,
@@ -24,7 +24,7 @@ import {
   routerSystemInstruction,
 } from "@/lib/activity-operation-prompts"
 import { type AttachmentDescriptor } from "@/lib/activity-prompts"
-import { activitySchema, type Activity } from "@/lib/activity-schema"
+import { activitySchema, toActivityFromModel, type Activity } from "@/lib/activity-schema"
 import {
   type DebugGenerationAttempt,
   type DebugStreamChunk,
@@ -236,11 +236,13 @@ async function callStructuredModel<T>({
 }
 
 async function callExecutorStream({
+  expectedAction,
   promptText,
   attachmentParts,
   emit,
   attemptNumber,
 }: {
+  expectedAction: ActivityOperation["action"]
   promptText: string
   attachmentParts: Part[]
   emit?: (event: OrchestrationEvent) => void
@@ -275,7 +277,7 @@ async function callExecutorStream({
         config: {
           temperature: 0.15,
           responseMimeType: "application/json",
-          responseJsonSchema: activityOperationJsonSchema,
+          responseJsonSchema: getActivityOperationJsonSchema(expectedAction),
           systemInstruction: executorSystemInstruction,
         },
       })
@@ -519,6 +521,7 @@ export async function orchestrateActivityOperation({
     })}${feedbackForExecutor ? `\n\nFeedback de revisao para corrigir:\n${feedbackForExecutor}` : ""}`
 
     const executorResult = await callExecutorStream({
+      expectedAction: normalizedPlanner.action,
       promptText: executorPrompt,
       attachmentParts,
       emit,
@@ -649,7 +652,7 @@ export async function orchestrateActivityOperation({
     const nextActivity = currentActivity
       ? activitySchema.parse(applyActivityOperation(currentActivity, executorResult.operation))
       : executorResult.operation.action === "full_regeneration"
-        ? activitySchema.parse(executorResult.operation.payload.activity)
+        ? activitySchema.parse(toActivityFromModel(executorResult.operation.payload.activity))
         : currentActivity
 
     if (debugPayload) {
