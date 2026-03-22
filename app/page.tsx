@@ -2084,39 +2084,6 @@ export default function HomePage() {
   return (
     <>
       <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-background">
-        <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleBack}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              <h1 className="text-base font-semibold text-foreground">Nova atividade</h1>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {currentActivity?.type === "quiz" ? (
-              <span className="flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1.5 text-xs font-medium text-orange-700">
-                <Gamepad2 className="h-3.5 w-3.5" />
-                Quiz
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary">
-                <ClipboardList className="h-3.5 w-3.5" />
-                Missao
-              </span>
-            )}
-            <p className="hidden text-xs text-muted-foreground md:block">
-              {currentModel ? `Gerado por ${currentModel}` : "Atividade pronta para editar"}
-            </p>
-          </div>
-        </div>
-
         <div className="flex min-h-0 flex-1">
           <div className="flex w-[390px] flex-col border-r border-border bg-card">
             <div className="flex-1 overflow-auto p-4">
@@ -2242,6 +2209,14 @@ export default function HomePage() {
           <div className="flex flex-1 flex-col overflow-hidden bg-muted/30">
             <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3">
               <div className="flex items-center gap-4">
+              <button
+                type="button"
+                onClick={handleBack}
+                className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Voltar
+              </button>
                 <button
                   type="button"
                   onClick={() => setRightPanel("editor")}
