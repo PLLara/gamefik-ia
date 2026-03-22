@@ -472,6 +472,15 @@ export default function HomePage() {
       ),
     [recentActivities, searchQuery]
   )
+  const initialConversationMessages = useMemo(
+    () => messages.filter((entry) => entry.id !== welcomeMessage.id).slice(-2),
+    [messages]
+  )
+  const latestClarificationVisible =
+    generationState !== "loading" &&
+    !currentActivity &&
+    initialConversationMessages.length > 0 &&
+    initialConversationMessages[initialConversationMessages.length - 1]?.role === "ai"
 
   useEffect(() => {
     setRecentActivities(loadStoredActivities())
@@ -1030,6 +1039,41 @@ export default function HomePage() {
         <pre className="max-h-72 overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
           {streamingPreviewText || "Aguardando os primeiros tokens do Gemini..."}
         </pre>
+      </div>
+    )
+  }
+
+  const renderClarificationCard = () => {
+    if (!latestClarificationVisible) {
+      return null
+    }
+
+    return (
+      <div className="rounded-2xl border border-primary/20 bg-card/95 p-4 shadow-card backdrop-blur-sm">
+        <div className="mb-3 flex items-center gap-2">
+          <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+            <Sparkles className="h-3.5 w-3.5" />
+            Preciso de mais contexto
+          </span>
+        </div>
+        <div className="space-y-3">
+          {initialConversationMessages.map((entry) => (
+            <div
+              key={entry.id}
+              className={cn(
+                "rounded-2xl px-4 py-3 text-sm leading-relaxed",
+                entry.role === "ai"
+                  ? "bg-muted text-foreground"
+                  : "bg-primary text-primary-foreground"
+              )}
+            >
+              {entry.content}
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-xs font-medium text-muted-foreground">
+          Responda no campo acima e eu continuo exatamente daqui.
+        </p>
       </div>
     )
   }
@@ -1673,6 +1717,12 @@ export default function HomePage() {
         {(generationState === "loading" || streamingPreviewText) && (
           <div className="chat-hero-animate chat-hero-delay-4 mt-6 w-full">
             {renderStreamingPreviewCard()}
+          </div>
+        )}
+
+        {renderClarificationCard() && (
+          <div className="chat-hero-animate chat-hero-delay-4 mt-6 w-full">
+            {renderClarificationCard()}
           </div>
         )}
 
