@@ -5,6 +5,7 @@ import Image from "next/image"
 import {
   ArrowLeft,
   ArrowRight,
+  Bug,
   CheckCircle2,
   ChevronDown,
   Circle,
@@ -47,6 +48,7 @@ import {
   type QuizQuestion,
   type StoredActivityRecord,
 } from "@/lib/activity-schema"
+import { type GenerationDebugPayload } from "@/lib/generation-debug"
 
 type ViewMode = "initial" | "creating"
 type RightPanelView = "preview" | "editor"
@@ -65,6 +67,13 @@ type UploadedAttachment = {
   name: string
   type: "pdf" | "image"
   sizeLabel: string
+}
+
+type GenerationResponsePayload = {
+  activity?: unknown
+  error?: string
+  model?: string
+  debug?: GenerationDebugPayload
 }
 
 const storageKey = "gamefik-manager.activities.v1"
@@ -227,6 +236,41 @@ function getClassroomLabel(value: string | null) {
   return value ?? classroomOptions[0]
 }
 
+function isLocalDebugHost(hostname: string) {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.endsWith(".localhost")
+  )
+}
+
+function formatDebugJson(value: unknown) {
+  if (value === null || value === undefined) {
+    return "n/a"
+  }
+
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function getLatestTokenCount(debugPayload: GenerationDebugPayload | null) {
+  const latestAttempt = debugPayload?.attempts[debugPayload.attempts.length - 1]
+
+  return (
+    latestAttempt?.usageMetadata?.totalTokenCount ??
+    latestAttempt?.usageMetadata?.candidatesTokenCount ??
+    latestAttempt?.candidates.reduce(
+      (total, candidate) => total + (candidate.tokenCount ?? 0),
+      0
+    ) ??
+    null
+  )
+}
+
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("initial")
   const [rightPanel, setRightPanel] = useState<RightPanelView>("editor")
@@ -244,6 +288,11 @@ export default function HomePage() {
   const [showClassDropdown, setShowClassDropdown] = useState(false)
   const [activeRecordId, setActiveRecordId] = useState<string | null>(null)
   const [currentModel, setCurrentModel] = useState<string | null>(null)
+  const [isLocalDebugMode, setIsLocalDebugMode] = useState(false)
+  const [showDebugPanel, setShowDebugPanel] = useState(false)
+  const [latestGenerationDebug, setLatestGenerationDebug] = useState<GenerationDebugPayload | null>(
+    null
+  )
   const fileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
@@ -263,6 +312,14 @@ export default function HomePage() {
 
   useEffect(() => {
     setRecentActivities(loadStoredActivities())
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return
+    }
+
+    setIsLocalDebugMode(isLocalDebugHost(window.location.hostname))
   }, [])
 
   useEffect(() => {
@@ -323,6 +380,7 @@ export default function HomePage() {
     ])
     setGenerationState("loading")
     setGenerationError(null)
+    setLatestGenerationDebug(null)
 
     try {
       const formData = new FormData()
@@ -337,13 +395,22 @@ export default function HomePage() {
         body: formData,
       })
 
-      const payload = (await response.json()) as {
-        activity?: unknown
-        error?: string
-        model?: string
+      const payload = (await response.json()) as GenerationResponsePayload
+
+      if (payload.debug) {
+        setLatestGenerationDebug(payload.debug)
+      }
+
+      if (typeof payload.model === "string" || payload.debug?.model) {
+        setCurrentModel(
+          typeof payload.model === "string" ? payload.model : payload.debug?.model ?? null
+        )
       }
 
       if (!response.ok) {
+        if (payload.debug && isLocalDebugMode) {
+          setShowDebugPanel(true)
+        }
         throw new Error(payload.error || "Nao foi possivel gerar a atividade.")
       }
 
@@ -355,11 +422,13 @@ export default function HomePage() {
       setViewMode("creating")
       setRightPanel("editor")
       setActiveRecordId(generatedActivity.id)
-      setCurrentModel(typeof payload.model === "string" ? payload.model : null)
       setSelectedClassroom(classroomOptions[0])
       setGenerationState("idle")
       replaceAssistantMessage(pendingMessageId, generatedActivity.teacherMessage)
       toast.success("Atividade gerada com sucesso.")
+      if (payload.debug && isLocalDebugMode) {
+        setShowDebugPanel(true)
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error
@@ -662,6 +731,398 @@ export default function HomePage() {
 
       toast.error(errorMessage)
     }
+  }
+
+  const renderDebugControls = () => {
+    if (!isLocalDebugMode) {
+      return null
+    }
+
+    const latestAttempt =
+      latestGenerationDebug?.attempts[latestGenerationDebug.attempts.length - 1] ?? null
+    const latestTokenCount = getLatestTokenCount(latestGenerationDebug)
+
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setShowDebugPanel(true)}
+          className="fixed bottom-6 right-6 z-[60] flex items-center gap-2 rounded-full border border-primary/30 bg-card/95 px-4 py-2 text-sm font-semibold text-foreground shadow-xl backdrop-blur-sm transition-colors hover:bg-card"
+        >
+          <Bug className="h-4 w-4 text-primary" />
+          Debug IA
+          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary">
+            localhost
+          </span>
+          {latestTokenCount ? (
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+              {latestTokenCount} tokens
+            </span>
+          ) : null}
+        </button>
+
+        {showDebugPanel && (
+          <>
+            <button
+              type="button"
+              aria-label="Fechar debug"
+              onClick={() => setShowDebugPanel(false)}
+              className="fixed inset-0 z-[69] bg-black/45 backdrop-blur-[1px]"
+            />
+            <aside className="fixed inset-y-0 right-0 z-[70] flex w-full max-w-3xl flex-col border-l border-border bg-background shadow-2xl">
+              <div className="flex items-center justify-between border-b border-border px-5 py-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Bug className="h-4 w-4 text-primary" />
+                    <h2 className="text-base font-semibold text-foreground">
+                      Debug completo da geracao
+                    </h2>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Visivel apenas em localhost. Aqui voce ve prompt, retries, resposta bruta, payload normalizado e telemetria.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowDebugPanel(false)}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 border-b border-border px-5 py-4 md:grid-cols-4">
+                <div className="rounded-xl border border-border bg-card px-3 py-3">
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    Modelo
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">
+                    {latestGenerationDebug?.finalModel ??
+                      currentModel ??
+                      latestGenerationDebug?.model ??
+                      "n/a"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border bg-card px-3 py-3">
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    API
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">
+                    {latestGenerationDebug?.apiVersion ?? "n/a"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border bg-card px-3 py-3">
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    Duracao
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">
+                    {latestGenerationDebug?.totalDurationMs
+                      ? `${latestGenerationDebug.totalDurationMs} ms`
+                      : "n/a"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border bg-card px-3 py-3">
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                    Tokens
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">
+                    {latestTokenCount ?? "n/a"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex-1 space-y-4 overflow-auto px-5 py-5">
+                {!latestGenerationDebug ? (
+                  <div className="rounded-2xl border border-dashed border-border bg-card px-5 py-6 text-sm text-muted-foreground">
+                    Ainda nao ha logs. Gere uma atividade para popular este painel.
+                  </div>
+                ) : (
+                  <>
+                    <section className="rounded-2xl border border-border bg-card p-4">
+                      <h3 className="mb-3 text-sm font-semibold text-foreground">
+                        Resumo da execucao
+                      </h3>
+                      <dl className="grid gap-3 text-sm md:grid-cols-2">
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                            Host da requisicao
+                          </dt>
+                          <dd className="mt-1 text-foreground">
+                            {latestGenerationDebug.requestHost ?? "n/a"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                            Tentativas
+                          </dt>
+                          <dd className="mt-1 text-foreground">
+                            {latestGenerationDebug.attempts.length}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                            Inicio
+                          </dt>
+                          <dd className="mt-1 text-foreground">
+                            {latestGenerationDebug.startedAt}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                            Conclusao
+                          </dt>
+                          <dd className="mt-1 text-foreground">
+                            {latestGenerationDebug.completedAt ?? "n/a"}
+                          </dd>
+                        </div>
+                        <div className="md:col-span-2">
+                          <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                            Modelo configurado / fallback
+                          </dt>
+                          <dd className="mt-1 text-foreground">
+                            {latestGenerationDebug.model}
+                            {latestGenerationDebug.fallbackModel
+                              ? ` → fallback: ${latestGenerationDebug.fallbackModel}`
+                              : ""}
+                          </dd>
+                        </div>
+                        <div className="md:col-span-2">
+                          <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                            Erro final
+                          </dt>
+                          <dd className="mt-1 text-foreground">
+                            {latestGenerationDebug.finalError ?? "Nenhum"}
+                          </dd>
+                        </div>
+                        <div className="md:col-span-2">
+                          <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                            Anexos considerados
+                          </dt>
+                          <dd className="mt-1 text-foreground">
+                            {latestGenerationDebug.attachmentSummary.length > 0
+                              ? latestGenerationDebug.attachmentSummary
+                                  .map(
+                                    (attachment) =>
+                                      `${attachment.name} (${attachment.mimeType}, ${formatFileSize(
+                                        attachment.size
+                                      )})`
+                                  )
+                                  .join(" • ")
+                              : "Nenhum anexo"}
+                          </dd>
+                        </div>
+                      </dl>
+                    </section>
+
+                    <section className="rounded-2xl border border-border bg-card p-4">
+                      <h3 className="mb-3 text-sm font-semibold text-foreground">
+                        Prompt-base e instrucao de sistema
+                      </h3>
+                      <div className="space-y-3">
+                        <div>
+                          <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                            Prompt-base
+                          </p>
+                          <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                            {latestGenerationDebug.basePrompt}
+                          </pre>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                            System instruction
+                          </p>
+                          <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                            {latestGenerationDebug.systemInstruction}
+                          </pre>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="rounded-2xl border border-border bg-card p-4">
+                      <h3 className="mb-3 text-sm font-semibold text-foreground">
+                        Resultado final normalizado
+                      </h3>
+                      <div className="space-y-3">
+                        <div>
+                          <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                            Payload normalizado
+                          </p>
+                          <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                            {formatDebugJson(latestGenerationDebug.finalNormalizedPayload)}
+                          </pre>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                            Atividade final enviada para a UI
+                          </p>
+                          <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                            {formatDebugJson(latestGenerationDebug.finalActivity)}
+                          </pre>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="rounded-2xl border border-border bg-card p-4">
+                      <h3 className="mb-3 text-sm font-semibold text-foreground">
+                        Tentativas
+                      </h3>
+                      <div className="space-y-3">
+                        {latestGenerationDebug.attempts.map((attempt) => (
+                          <details
+                            key={attempt.attemptNumber}
+                            className="overflow-hidden rounded-xl border border-border bg-background"
+                            open={attempt.attemptNumber === latestGenerationDebug.attempts.length}
+                          >
+                            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-foreground">
+                              <span>
+                                Tentativa {attempt.attemptNumber} · {attempt.requestConfig.model}
+                              </span>
+                              <span className="text-xs font-medium text-muted-foreground">
+                                {attempt.durationMs} ms ·{" "}
+                                {attempt.usageMetadata?.totalTokenCount ??
+                                  attempt.usageMetadata?.candidatesTokenCount ??
+                                  "n/a"}{" "}
+                                tokens
+                              </span>
+                            </summary>
+                            <div className="space-y-4 border-t border-border px-4 py-4">
+                              <div className="grid gap-3 text-sm md:grid-cols-2">
+                                <div>
+                                  <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                                    Inicio
+                                  </p>
+                                  <p className="mt-1 text-foreground">{attempt.startedAt}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                                    Sucesso
+                                  </p>
+                                  <p className="mt-1 text-foreground">
+                                    {attempt.success ? "Sim" : "Nao"}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                                    Response ID
+                                  </p>
+                                  <p className="mt-1 break-all text-foreground">
+                                    {attempt.responseId ?? "n/a"}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                                    Model version
+                                  </p>
+                                  <p className="mt-1 break-all text-foreground">
+                                    {attempt.modelVersion ?? "n/a"}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                  Configuracao da requisicao
+                                </p>
+                                <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                  {formatDebugJson(attempt.requestConfig)}
+                                </pre>
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                  Prompt final usado nesta tentativa
+                                </p>
+                                <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                  {attempt.promptText}
+                                </pre>
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                  Usage metadata / tokens
+                                </p>
+                                <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                  {formatDebugJson(attempt.usageMetadata)}
+                                </pre>
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                  Prompt feedback
+                                </p>
+                                <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                  {formatDebugJson(attempt.promptFeedback)}
+                                </pre>
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                  Candidates
+                                </p>
+                                <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                  {formatDebugJson(attempt.candidates)}
+                                </pre>
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                  Resultado bruto do prompt
+                                </p>
+                                <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                  {attempt.responseText ?? "n/a"}
+                                </pre>
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                  JSON parseado
+                                </p>
+                                <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                  {formatDebugJson(attempt.parsedResponseJson)}
+                                </pre>
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                  Payload normalizado desta tentativa
+                                </p>
+                                <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                  {formatDebugJson(attempt.normalizedPayload)}
+                                </pre>
+                              </div>
+
+                              <div>
+                                <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+                                  Erro de normalizacao / validacao
+                                </p>
+                                <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                                  {attempt.normalizationError ?? "Nenhum"}
+                                </pre>
+                              </div>
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    </section>
+
+                    {latestAttempt && (
+                      <section className="rounded-2xl border border-border bg-card p-4">
+                        <h3 className="mb-3 text-sm font-semibold text-foreground">
+                          Ultima tentativa em foco
+                        </h3>
+                        <pre className="overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                          {formatDebugJson(latestAttempt)}
+                        </pre>
+                      </section>
+                    )}
+                  </>
+                )}
+              </div>
+            </aside>
+          </>
+        )}
+      </>
+    )
   }
 
   const renderInitialView = () => (
@@ -1385,328 +1846,335 @@ export default function HomePage() {
   }
 
   if (viewMode === "initial") {
-    return renderInitialView()
+    return (
+      <>
+        {renderInitialView()}
+        {renderDebugControls()}
+      </>
+    )
   }
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-background">
-      <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={handleBack}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-primary" />
-            <h1 className="text-base font-semibold text-foreground">Nova atividade</h1>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {currentActivity?.type === "quiz" ? (
-            <span className="flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1.5 text-xs font-medium text-orange-700">
-              <Gamepad2 className="h-3.5 w-3.5" />
-              Quiz
-            </span>
-          ) : (
-            <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary">
-              <ClipboardList className="h-3.5 w-3.5" />
-              Missao
-            </span>
-          )}
-          <p className="hidden text-xs text-muted-foreground md:block">
-            {currentModel ? `Gerado por ${currentModel}` : "Atividade pronta para editar"}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex min-h-0 flex-1">
-        <div className="flex w-[390px] flex-col border-r border-border bg-card">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Historico
-            </p>
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Buscar..."
-                className="h-8 w-36 rounded-lg border border-border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/30"
-              />
-            </div>
-          </div>
-
-          <div className="border-b border-border">
-            <div className="flex max-h-56 flex-col gap-1 overflow-auto p-2">
-              {filteredActivities.length > 0 ? (
-                filteredActivities.map((record) => (
-                  <button
-                    key={record.activity.id}
-                    type="button"
-                    onClick={() => loadActivityRecord(record)}
-                    className={cn(
-                      "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                      activeRecordId === record.activity.id
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "text-foreground hover:bg-sidebar-accent"
-                    )}
-                  >
-                    {record.activity.type === "quiz" ? (
-                      <Gamepad2 className="h-4 w-4 shrink-0 text-orange-500" />
-                    ) : (
-                      <ClipboardList className="h-4 w-4 shrink-0 text-primary" />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium">{record.activity.title}</p>
-                      <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                        <span>{formatHistoryDate(record.updatedAt)}</span>
-                        <span
-                          className={cn(
-                            "rounded-full px-2 py-0.5 font-semibold",
-                            record.status === "published"
-                              ? "bg-emerald-100 text-emerald-700"
-                              : "bg-slate-100 text-slate-700"
-                          )}
-                        >
-                          {record.status === "published" ? "Publicado" : "Rascunho"}
-                        </span>
-                      </div>
-                    </div>
-                  </button>
-                ))
-              ) : (
-                <div className="px-3 py-5 text-center text-sm text-muted-foreground">
-                  Nenhuma atividade encontrada.
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-auto p-4">
-            <div className="flex flex-col gap-4">
-              {messages.map((entry) => (
-                <div
-                  key={entry.id}
-                  className={cn("flex gap-3", entry.role === "user" && "justify-end")}
-                >
-                  {entry.role === "ai" && (
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                      <Sparkles className="h-4 w-4 text-primary" />
-                    </div>
-                  )}
-                  <div
-                    className={cn(
-                      "max-w-[85%] rounded-2xl px-4 py-3 text-sm",
-                      entry.role === "ai"
-                        ? "bg-muted text-foreground"
-                        : "bg-primary text-primary-foreground"
-                    )}
-                  >
-                    {entry.content}
-                  </div>
-                </div>
-              ))}
-              <div ref={chatEndRef} />
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
-            {quickChips.map((chip) => (
-              <button
-                key={chip}
-                type="button"
-                onClick={() => handleQuickChip(chip)}
-                className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-sidebar-accent"
-              >
-                {chip}
-              </button>
-            ))}
-          </div>
-
-          <form onSubmit={handleSubmit} className="border-t border-border p-4">
-            {attachments.length > 0 && (
-              <div className="mb-3 flex flex-wrap gap-2">
-                {attachments.map((attachment) => (
-                  <div
-                    key={attachment.id}
-                    className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-2.5 py-1.5"
-                  >
-                    {attachment.type === "pdf" ? (
-                      <FileText className="h-3.5 w-3.5 text-destructive" />
-                    ) : (
-                      <ImageIcon className="h-3.5 w-3.5 text-primary" />
-                    )}
-                    <span className="max-w-24 truncate text-xs font-medium">
-                      {attachment.name}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => removeAttachment(attachment.id)}
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {generationError && (
-              <div className="mb-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {generationError}
-              </div>
-            )}
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
-              >
-                <Paperclip className="h-4 w-4" />
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,image/*"
-                multiple
-                onChange={handleFileSelect}
-                className="hidden"
-              />
-              <input
-                type="text"
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                placeholder="Descreva sua atividade..."
-                className="h-10 flex-1 rounded-lg border border-border bg-background px-4 text-sm outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/30"
-              />
-              <button
-                type="submit"
-                disabled={!canSubmit}
-                className={cn(
-                  "flex h-11 w-11 items-center justify-center rounded-xl transition-all duration-300 ease-out",
-                  canSubmit
-                    ? "bg-gradient-to-br from-primary via-primary to-primary/80 text-primary-foreground shadow-lg shadow-primary/25 hover:scale-105 hover:shadow-xl hover:shadow-primary/30"
-                    : "cursor-not-allowed bg-muted text-muted-foreground"
-                )}
-              >
-                <Send className="h-4 w-4" />
-              </button>
-            </div>
-          </form>
-        </div>
-
-        <div className="flex flex-1 flex-col overflow-hidden bg-muted/30">
-          <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3">
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                onClick={() => setRightPanel("editor")}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
-                  rightPanel === "editor"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
-                )}
-              >
-                <Pencil className="h-3.5 w-3.5" />
-                Editar atividade
-              </button>
-              <button
-                type="button"
-                onClick={() => setRightPanel("preview")}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
-                  rightPanel === "preview"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
-                )}
-              >
-                <Eye className="h-3.5 w-3.5" />
-                Pre-visualizar
-              </button>
-            </div>
-          </div>
-
-          {rightPanel === "editor"
-            ? currentActivity?.type === "quiz"
-              ? renderQuizEditor()
-              : renderMissionEditor()
-            : renderPreview()}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between border-t border-border bg-card px-4 py-3">
-        <button
-          type="button"
-          onClick={() => saveCurrentActivity("draft")}
-          disabled={!currentActivity}
-          className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-accent disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Save className="h-4 w-4" />
-          Salvar rascunho
-        </button>
-
-        <div className="flex items-center gap-3">
-          <div className="relative">
+    <>
+      <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-background">
+        <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3">
+          <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => setShowClassDropdown((currentValue) => !currentValue)}
-              className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-sidebar-accent"
+              onClick={handleBack}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
             >
-              <Users className="h-4 w-4 text-muted-foreground" />
-              {selectedClassroom}
-              <ChevronDown
-                className={cn(
-                  "h-4 w-4 text-muted-foreground transition-transform",
-                  showClassDropdown && "rotate-180"
-                )}
-              />
+              <ArrowLeft className="h-4 w-4" />
             </button>
-            {showClassDropdown && (
-              <>
-                <button
-                  type="button"
-                  className="fixed inset-0 z-40 cursor-default"
-                  onClick={() => setShowClassDropdown(false)}
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <h1 className="text-base font-semibold text-foreground">Nova atividade</h1>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {currentActivity?.type === "quiz" ? (
+              <span className="flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1.5 text-xs font-medium text-orange-700">
+                <Gamepad2 className="h-3.5 w-3.5" />
+                Quiz
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary">
+                <ClipboardList className="h-3.5 w-3.5" />
+                Missao
+              </span>
+            )}
+            <p className="hidden text-xs text-muted-foreground md:block">
+              {currentModel ? `Gerado por ${currentModel}` : "Atividade pronta para editar"}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1">
+          <div className="flex w-[390px] flex-col border-r border-border bg-card">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Historico
+              </p>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Buscar..."
+                  className="h-8 w-36 rounded-lg border border-border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/30"
                 />
-                <div className="absolute bottom-full left-0 z-50 mb-2 w-48 rounded-xl border border-border bg-card p-1 shadow-lg">
-                  {classroomOptions.map((classroom) => (
+              </div>
+            </div>
+
+            <div className="border-b border-border">
+              <div className="flex max-h-56 flex-col gap-1 overflow-auto p-2">
+                {filteredActivities.length > 0 ? (
+                  filteredActivities.map((record) => (
                     <button
-                      key={classroom}
+                      key={record.activity.id}
                       type="button"
-                      onClick={() => handleSelectClassroom(classroom)}
+                      onClick={() => loadActivityRecord(record)}
                       className={cn(
-                        "flex w-full items-center rounded-lg px-3 py-2 text-sm transition-colors",
-                        selectedClassroom === classroom
+                        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                        activeRecordId === record.activity.id
                           ? "bg-sidebar-accent text-sidebar-accent-foreground"
                           : "text-foreground hover:bg-sidebar-accent"
                       )}
                     >
-                      {classroom}
+                      {record.activity.type === "quiz" ? (
+                        <Gamepad2 className="h-4 w-4 shrink-0 text-orange-500" />
+                      ) : (
+                        <ClipboardList className="h-4 w-4 shrink-0 text-primary" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">{record.activity.title}</p>
+                        <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                          <span>{formatHistoryDate(record.updatedAt)}</span>
+                          <span
+                            className={cn(
+                              "rounded-full px-2 py-0.5 font-semibold",
+                              record.status === "published"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : "bg-slate-100 text-slate-700"
+                            )}
+                          >
+                            {record.status === "published" ? "Publicado" : "Rascunho"}
+                          </span>
+                        </div>
+                      </div>
                     </button>
+                  ))
+                ) : (
+                  <div className="px-3 py-5 text-center text-sm text-muted-foreground">
+                    Nenhuma atividade encontrada.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto p-4">
+              <div className="flex flex-col gap-4">
+                {messages.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className={cn("flex gap-3", entry.role === "user" && "justify-end")}
+                  >
+                    {entry.role === "ai" && (
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                        <Sparkles className="h-4 w-4 text-primary" />
+                      </div>
+                    )}
+                    <div
+                      className={cn(
+                        "max-w-[85%] rounded-2xl px-4 py-3 text-sm",
+                        entry.role === "ai"
+                          ? "bg-muted text-foreground"
+                          : "bg-primary text-primary-foreground"
+                      )}
+                    >
+                      {entry.content}
+                    </div>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
+              {quickChips.map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => handleQuickChip(chip)}
+                  className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-sidebar-accent"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={handleSubmit} className="border-t border-border p-4">
+              {attachments.length > 0 && (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {attachments.map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-2.5 py-1.5"
+                    >
+                      {attachment.type === "pdf" ? (
+                        <FileText className="h-3.5 w-3.5 text-destructive" />
+                      ) : (
+                        <ImageIcon className="h-3.5 w-3.5 text-primary" />
+                      )}
+                      <span className="max-w-24 truncate text-xs font-medium">
+                        {attachment.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(attachment.id)}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
                   ))}
                 </div>
-              </>
-            )}
+              )}
+
+              {generationError && (
+                <div className="mb-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {generationError}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,image/*"
+                  multiple
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+                <input
+                  type="text"
+                  value={message}
+                  onChange={(event) => setMessage(event.target.value)}
+                  placeholder="Descreva sua atividade..."
+                  className="h-10 flex-1 rounded-lg border border-border bg-background px-4 text-sm outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/30"
+                />
+                <button
+                  type="submit"
+                  disabled={!canSubmit}
+                  className={cn(
+                    "flex h-11 w-11 items-center justify-center rounded-xl transition-all duration-300 ease-out",
+                    canSubmit
+                      ? "bg-gradient-to-br from-primary via-primary to-primary/80 text-primary-foreground shadow-lg shadow-primary/25 hover:scale-105 hover:shadow-xl hover:shadow-primary/30"
+                      : "cursor-not-allowed bg-muted text-muted-foreground"
+                  )}
+                >
+                  <Send className="h-4 w-4" />
+                </button>
+              </div>
+            </form>
           </div>
 
+          <div className="flex flex-1 flex-col overflow-hidden bg-muted/30">
+            <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3">
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => setRightPanel("editor")}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                    rightPanel === "editor"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+                  )}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  Editar atividade
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRightPanel("preview")}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                    rightPanel === "preview"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+                  )}
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  Pre-visualizar
+                </button>
+              </div>
+            </div>
+
+            {rightPanel === "editor"
+              ? currentActivity?.type === "quiz"
+                ? renderQuizEditor()
+                : renderMissionEditor()
+              : renderPreview()}
+          </div>
+        </div>
+        <div className="flex items-center justify-between border-t border-border bg-card px-4 py-3">
           <button
             type="button"
-            onClick={() => saveCurrentActivity("published")}
+            onClick={() => saveCurrentActivity("draft")}
             disabled={!currentActivity}
-            className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Zap className="h-4 w-4" />
-            Publicar atividade
+            <Save className="h-4 w-4" />
+            Salvar rascunho
           </button>
+
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowClassDropdown((currentValue) => !currentValue)}
+                className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-sidebar-accent"
+              >
+                <Users className="h-4 w-4 text-muted-foreground" />
+                {selectedClassroom}
+                <ChevronDown
+                  className={cn(
+                    "h-4 w-4 text-muted-foreground transition-transform",
+                    showClassDropdown && "rotate-180"
+                  )}
+                />
+              </button>
+              {showClassDropdown && (
+                <>
+                  <button
+                    type="button"
+                    className="fixed inset-0 z-40 cursor-default"
+                    onClick={() => setShowClassDropdown(false)}
+                  />
+                  <div className="absolute bottom-full left-0 z-50 mb-2 w-48 rounded-xl border border-border bg-card p-1 shadow-lg">
+                    {classroomOptions.map((classroom) => (
+                      <button
+                        key={classroom}
+                        type="button"
+                        onClick={() => handleSelectClassroom(classroom)}
+                        className={cn(
+                          "flex w-full items-center rounded-lg px-3 py-2 text-sm transition-colors",
+                          selectedClassroom === classroom
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                            : "text-foreground hover:bg-sidebar-accent"
+                        )}
+                      >
+                        {classroom}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => saveCurrentActivity("published")}
+              disabled={!currentActivity}
+              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Zap className="h-4 w-4" />
+              Publicar atividade
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+      {renderDebugControls()}
+    </>
   )
 }
