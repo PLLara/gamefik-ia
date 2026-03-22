@@ -81,6 +81,7 @@ export function FilterDropdown({
     <div ref={dropdownRef} className={cn("relative", className)}>
       {/* Trigger */}
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
         className={cn(
           "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors",
@@ -127,6 +128,7 @@ export function FilterDropdown({
               filteredOptions.map((option) => (
                 <button
                   key={option.value}
+                  type="button"
                   onClick={() => handleSelect(option.value)}
                   className={cn(
                     "flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors",
@@ -172,6 +174,7 @@ export function FilterDropdown({
           {multiple && selectedValues.length > 0 && (
             <div className="mt-1.5 border-t border-border pt-1.5">
               <button
+                type="button"
                 onClick={() => onChange([])}
                 className="w-full rounded-lg px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-sidebar-accent"
               >
