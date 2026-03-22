@@ -8,7 +8,6 @@ import {
   Bug,
   Copy,
   CheckCircle2,
-  ChevronDown,
   Circle,
   ClipboardList,
   Eye,
@@ -19,13 +18,10 @@ import {
   Pencil,
   Plus,
   Save,
-  Search,
   Send,
   Sparkles,
   Trash2,
-  Users,
   X,
-  Zap,
 } from "lucide-react"
 import { toast } from "sonner"
 import { FilterDropdown } from "@/components/filter-dropdown"
@@ -36,22 +32,17 @@ import {
 import { cn } from "@/lib/utils"
 import {
   activitySchema,
-  classroomOptions,
   createEmptyQuizQuestion,
   createEntityId,
-  createStoredActivityRecord,
   isMissionActivity,
   isQuizActivity,
   relabelAlternatives,
-  storedActivityRecordSchema,
   type Activity,
-  type ActivityStatus,
   type MissionActivity,
   type MissionProofType,
   type MissionValidation,
   type QuizActivity,
   type QuizQuestion,
-  type StoredActivityRecord,
 } from "@/lib/activity-schema"
 import { type GenerationDebugPayload } from "@/lib/generation-debug"
 
@@ -148,8 +139,6 @@ type StreamingGenerationEvent =
       }
     }
 
-const storageKey = "gamefik-manager.activities.v1"
-
 const welcomeMessage: ChatMessage = {
   id: "welcome-message",
   role: "ai",
@@ -164,68 +153,6 @@ const quickChips = [
   "Quiz de revisao antes da prova",
 ]
 
-const seedStoredActivities: StoredActivityRecord[] = [
-  {
-    activity: {
-      id: "seed-quiz-fracoes",
-      type: "quiz",
-      title: "Quiz: Fracoes para o 6o Ano",
-      description: "Revise fracoes equivalentes, comparacao e operacoes basicas.",
-      teacherMessage:
-        "Resolva com calma e confira cada alternativa antes de responder.",
-      attachmentContext: ["Resumo de fracoes", "Lista de exercicios basicos"],
-      quizQuestions: [
-        {
-          id: "seed-question-1",
-          enunciado: "Qual fracao e equivalente a 1/2?",
-          points: 10,
-          alternatives: [
-            { id: "seed-q1-a", label: "A", text: "2/6", correct: false },
-            { id: "seed-q1-b", label: "B", text: "3/6", correct: true },
-            { id: "seed-q1-c", label: "C", text: "1/3", correct: false },
-            { id: "seed-q1-d", label: "D", text: "4/10", correct: false },
-          ],
-        },
-        {
-          id: "seed-question-2",
-          enunciado: "Quanto e 1/2 + 1/4?",
-          points: 10,
-          alternatives: [
-            { id: "seed-q2-a", label: "A", text: "2/4", correct: false },
-            { id: "seed-q2-b", label: "B", text: "3/4", correct: true },
-            { id: "seed-q2-c", label: "C", text: "1/4", correct: false },
-            { id: "seed-q2-d", label: "D", text: "4/4", correct: false },
-          ],
-        },
-      ],
-    },
-    status: "draft",
-    classroom: "6o Ano A",
-    createdAt: "2026-03-21T14:30:00.000Z",
-    updatedAt: "2026-03-21T15:10:00.000Z",
-    publishedAt: null,
-  },
-  {
-    activity: {
-      id: "seed-missao-leitura",
-      type: "missao",
-      title: "Missao: Leitura e Reflexao",
-      description:
-        "Leia o capitulo 3 do livro e escreva um paragrafo explicando a principal ideia apresentada.",
-      teacherMessage:
-        "Capriche na explicacao e use exemplos do texto para sustentar sua resposta.",
-      attachmentContext: ["Capitulo 3 do livro", "Roteiro de reflexao"],
-      missionProofType: "texto",
-      missionValidation: "manual",
-    },
-    status: "published",
-    classroom: "7o Ano A",
-    createdAt: "2026-03-20T09:00:00.000Z",
-    updatedAt: "2026-03-20T10:15:00.000Z",
-    publishedAt: "2026-03-20T10:15:00.000Z",
-  },
-]
-
 function formatFileSize(bytes: number) {
   if (bytes < 1024) {
     return `${bytes} B`
@@ -236,58 +163,6 @@ function formatFileSize(bytes: number) {
   }
 
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function formatHistoryDate(isoDate: string) {
-  return new Intl.DateTimeFormat("pt-BR", {
-    day: "2-digit",
-    month: "2-digit",
-  }).format(new Date(isoDate))
-}
-
-function cloneActivity(activity: Activity) {
-  if (typeof structuredClone === "function") {
-    return structuredClone(activity)
-  }
-
-  return JSON.parse(JSON.stringify(activity)) as Activity
-}
-
-function sortStoredActivities(records: StoredActivityRecord[]) {
-  return [...records].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-}
-
-function loadStoredActivities() {
-  if (typeof window === "undefined") {
-    return seedStoredActivities
-  }
-
-  const storedValue = window.localStorage.getItem(storageKey)
-
-  if (!storedValue) {
-    return seedStoredActivities
-  }
-
-  try {
-    const parsedValue = JSON.parse(storedValue)
-    const parsedRecords = storedActivityRecordSchema.array().safeParse(parsedValue)
-
-    if (!parsedRecords.success || parsedRecords.data.length === 0) {
-      return seedStoredActivities
-    }
-
-    return sortStoredActivities(parsedRecords.data)
-  } catch {
-    return seedStoredActivities
-  }
-}
-
-function persistStoredActivities(records: StoredActivityRecord[]) {
-  if (typeof window === "undefined") {
-    return
-  }
-
-  window.localStorage.setItem(storageKey, JSON.stringify(records))
 }
 
 function buildUserMessage(prompt: string, attachments: UploadedAttachment[]) {
@@ -302,10 +177,6 @@ function buildUserMessage(prompt: string, attachments: UploadedAttachment[]) {
   }
 
   return `Gerar atividade usando ${attachments.length} anexos enviados.`
-}
-
-function getClassroomLabel(value: string | null) {
-  return value ?? classroomOptions[0]
 }
 
 function isLocalDebugHost(hostname: string) {
@@ -442,11 +313,6 @@ export default function HomePage() {
   const [generationError, setGenerationError] = useState<string | null>(null)
   const [currentActivity, setCurrentActivity] = useState<Activity | null>(null)
   const [currentQuestion, setCurrentQuestion] = useState(0)
-  const [searchQuery, setSearchQuery] = useState("")
-  const [recentActivities, setRecentActivities] = useState<StoredActivityRecord[]>([])
-  const [selectedClassroom, setSelectedClassroom] = useState<string>(classroomOptions[0])
-  const [showClassDropdown, setShowClassDropdown] = useState(false)
-  const [activeRecordId, setActiveRecordId] = useState<string | null>(null)
   const [currentModel, setCurrentModel] = useState<string | null>(null)
   const [isLocalDebugMode, setIsLocalDebugMode] = useState(false)
   const [showDebugPanel, setShowDebugPanel] = useState(false)
@@ -465,13 +331,6 @@ export default function HomePage() {
     generationState !== "loading" &&
     (message.trim().length > 0 || attachments.length > 0)
 
-  const filteredActivities = useMemo(
-    () =>
-      recentActivities.filter((record) =>
-        record.activity.title.toLowerCase().includes(searchQuery.toLowerCase())
-      ),
-    [recentActivities, searchQuery]
-  )
   const initialConversationMessages = useMemo(
     () => messages.filter((entry) => entry.id !== welcomeMessage.id).slice(-2),
     [messages]
@@ -481,10 +340,6 @@ export default function HomePage() {
     !currentActivity &&
     initialConversationMessages.length > 0 &&
     initialConversationMessages[initialConversationMessages.length - 1]?.role === "ai"
-
-  useEffect(() => {
-    setRecentActivities(loadStoredActivities())
-  }, [])
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -694,8 +549,6 @@ export default function HomePage() {
       setQuizTab(generatedActivity.type === "quiz" ? "questoes" : "informacoes")
       setViewMode("creating")
       setRightPanel("editor")
-      setActiveRecordId(generatedActivity.id)
-      setSelectedClassroom(classroomOptions[0])
       setGenerationState("idle")
       setStreamingPreviewText("")
       setStreamingPreviewAttempt(null)
@@ -856,13 +709,6 @@ export default function HomePage() {
     }))
   }
 
-  const updatePoints = (questionIndex: number, points: number) => {
-    updateQuizQuestion(questionIndex, (question) => ({
-      ...question,
-      points,
-    }))
-  }
-
   const addQuestion = () => {
     updateQuiz((activity) => {
       if (activity.quizQuestions.length >= 10) {
@@ -946,63 +792,15 @@ export default function HomePage() {
     })
   }
 
-  const handleSelectClassroom = (classroom: string) => {
-    setSelectedClassroom(classroom)
-    setShowClassDropdown(false)
-  }
-
-  const loadActivityRecord = (record: StoredActivityRecord) => {
-    setCurrentActivity(cloneActivity(record.activity))
-    setSelectedClassroom(getClassroomLabel(record.classroom))
-    setViewMode("creating")
-    setRightPanel("editor")
-    setCurrentQuestion(0)
-    setQuizTab(record.activity.type === "quiz" ? "questoes" : "informacoes")
-    setActiveRecordId(record.activity.id)
-    setGenerationError(null)
-    setMessages([
-      welcomeMessage,
-      {
-        id: createEntityId("message"),
-        role: "ai",
-        content: `Carreguei "${record.activity.title}" para voce continuar editando.`,
-      },
-    ])
-    toast.success(`"${record.activity.title}" carregada.`)
-  }
-
-  const saveCurrentActivity = (status: ActivityStatus) => {
+  const saveCurrentActivity = () => {
     if (!currentActivity) {
       toast.error("Gere ou carregue uma atividade antes de salvar.")
       return
     }
 
     try {
-      const validatedActivity = activitySchema.parse(currentActivity)
-      const existingRecord = recentActivities.find(
-        (record) => record.activity.id === validatedActivity.id
-      )
-      const classroom =
-        selectedClassroom === classroomOptions[0] ? null : selectedClassroom
-      const nextRecord = createStoredActivityRecord(
-        cloneActivity(validatedActivity),
-        status,
-        classroom,
-        existingRecord
-      )
-      const nextRecords = sortStoredActivities([
-        nextRecord,
-        ...recentActivities.filter((record) => record.activity.id !== validatedActivity.id),
-      ])
-
-      setRecentActivities(nextRecords)
-      setActiveRecordId(validatedActivity.id)
-      persistStoredActivities(nextRecords)
-      toast.success(
-        status === "draft"
-          ? "Rascunho salvo com sucesso."
-          : "Atividade publicada com sucesso."
-      )
+      activitySchema.parse(currentActivity)
+      toast.success("Rascunho salvo com sucesso.")
     } catch (error) {
       const errorMessage =
         error instanceof Error
@@ -1920,22 +1718,6 @@ export default function HomePage() {
               </div>
 
               <div className="mb-6">
-                <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Pontos
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={question.points}
-                  onChange={(event) =>
-                    updatePoints(currentQuestion, Number(event.target.value || 0))
-                  }
-                  className="w-32 rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
-                />
-              </div>
-
-              <div className="mb-6">
                 <div className="mb-3 flex items-center justify-between">
                   <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     Alternativas
@@ -2160,8 +1942,6 @@ export default function HomePage() {
     }
 
     const quizQuestionCount = currentQuiz?.quizQuestions.length ?? 0
-    const quizTotalPoints =
-      currentQuiz?.quizQuestions.reduce((total, question) => total + question.points, 0) ?? 0
     const previewQuestion = currentQuiz?.quizQuestions[0] ?? null
 
     return (
@@ -2177,10 +1957,7 @@ export default function HomePage() {
                 <div className="h-2.5 w-5 rounded-sm border border-white/50 bg-white/20" />
                 <div className="h-2.5 w-2.5 rounded-full border border-white/50 bg-white/20" />
               </div>
-              <div className="flex items-center gap-1 text-xs font-medium text-white">
-                <span>AAA</span>
-                <Zap className="h-3 w-3" />
-              </div>
+                <div className="text-xs font-medium text-white">AAA</div>
             </div>
 
             <div className="bg-white">
@@ -2210,12 +1987,6 @@ export default function HomePage() {
                     {currentActivity.type === "quiz"
                       ? `${quizQuestionCount} questoes`
                       : currentMission?.missionProofType.toUpperCase()}
-                  </span>
-                  <span className="flex items-center gap-1 rounded-full bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-700">
-                    <Zap className="h-3.5 w-3.5" />
-                    {currentActivity.type === "quiz"
-                      ? `${quizTotalPoints} pts`
-                      : currentMission?.missionValidation.toUpperCase()}
                   </span>
                 </div>
 
@@ -2348,68 +2119,6 @@ export default function HomePage() {
 
         <div className="flex min-h-0 flex-1">
           <div className="flex w-[390px] flex-col border-r border-border bg-card">
-            <div className="flex items-center justify-between border-b border-border px-4 py-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Historico
-              </p>
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Buscar..."
-                  className="h-8 w-36 rounded-lg border border-border bg-background pl-8 pr-3 text-xs outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/30"
-                />
-              </div>
-            </div>
-
-            <div className="border-b border-border">
-              <div className="flex max-h-56 flex-col gap-1 overflow-auto p-2">
-                {filteredActivities.length > 0 ? (
-                  filteredActivities.map((record) => (
-                    <button
-                      key={record.activity.id}
-                      type="button"
-                      onClick={() => loadActivityRecord(record)}
-                      className={cn(
-                        "flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                        activeRecordId === record.activity.id
-                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                          : "text-foreground hover:bg-sidebar-accent"
-                      )}
-                    >
-                      {record.activity.type === "quiz" ? (
-                        <Gamepad2 className="h-4 w-4 shrink-0 text-orange-500" />
-                      ) : (
-                        <ClipboardList className="h-4 w-4 shrink-0 text-primary" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-medium">{record.activity.title}</p>
-                        <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                          <span>{formatHistoryDate(record.updatedAt)}</span>
-                          <span
-                            className={cn(
-                              "rounded-full px-2 py-0.5 font-semibold",
-                              record.status === "published"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : "bg-slate-100 text-slate-700"
-                            )}
-                          >
-                            {record.status === "published" ? "Publicado" : "Rascunho"}
-                          </span>
-                        </div>
-                      </div>
-                    </button>
-                  ))
-                ) : (
-                  <div className="px-3 py-5 text-center text-sm text-muted-foreground">
-                    Nenhuma atividade encontrada.
-                  </div>
-                )}
-              </div>
-            </div>
-
             <div className="flex-1 overflow-auto p-4">
               <div className="flex flex-col gap-4">
                 {messages.map((entry) => (
@@ -2572,68 +2281,13 @@ export default function HomePage() {
         <div className="flex items-center justify-between border-t border-border bg-card px-4 py-3">
           <button
             type="button"
-            onClick={() => saveCurrentActivity("draft")}
+            onClick={saveCurrentActivity}
             disabled={!currentActivity}
             className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Save className="h-4 w-4" />
             Salvar rascunho
           </button>
-
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowClassDropdown((currentValue) => !currentValue)}
-                className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-sidebar-accent"
-              >
-                <Users className="h-4 w-4 text-muted-foreground" />
-                {selectedClassroom}
-                <ChevronDown
-                  className={cn(
-                    "h-4 w-4 text-muted-foreground transition-transform",
-                    showClassDropdown && "rotate-180"
-                  )}
-                />
-              </button>
-              {showClassDropdown && (
-                <>
-                  <button
-                    type="button"
-                    className="fixed inset-0 z-40 cursor-default"
-                    onClick={() => setShowClassDropdown(false)}
-                  />
-                  <div className="absolute bottom-full left-0 z-50 mb-2 w-48 rounded-xl border border-border bg-card p-1 shadow-lg">
-                    {classroomOptions.map((classroom) => (
-                      <button
-                        key={classroom}
-                        type="button"
-                        onClick={() => handleSelectClassroom(classroom)}
-                        className={cn(
-                          "flex w-full items-center rounded-lg px-3 py-2 text-sm transition-colors",
-                          selectedClassroom === classroom
-                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                            : "text-foreground hover:bg-sidebar-accent"
-                        )}
-                      >
-                        {classroom}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => saveCurrentActivity("published")}
-              disabled={!currentActivity}
-              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Zap className="h-4 w-4" />
-              Publicar atividade
-            </button>
-          </div>
         </div>
       </div>
       {renderDebugControls()}
