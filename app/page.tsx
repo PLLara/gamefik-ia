@@ -2411,11 +2411,6 @@ export default function HomePage() {
             </div>
 
             <div className="flex-1 overflow-auto p-4">
-              {renderStreamingPreviewCard() && (
-                <div className="mb-4">
-                  {renderStreamingPreviewCard()}
-                </div>
-              )}
               <div className="flex flex-col gap-4">
                 {messages.map((entry) => (
                   <div
@@ -2457,6 +2452,12 @@ export default function HomePage() {
             </div>
 
             <form onSubmit={handleSubmit} className="border-t border-border p-4">
+              {renderStreamingPreviewCard() && (
+                <div className="mb-3">
+                  {renderStreamingPreviewCard()}
+                </div>
+              )}
+
               {attachments.length > 0 && (
                 <div className="mb-3 flex flex-wrap gap-2">
                   {attachments.map((attachment) => (
