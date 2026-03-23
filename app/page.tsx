@@ -76,6 +76,24 @@ type UserFacingError = {
   suggestion?: string
 }
 
+type PendingClarificationContext = {
+  originalPrompt: string
+  latestQuestion: string
+}
+
+type AddContentModalState = {
+  kind: "question" | "alternative"
+  questionIndex: number | null
+  step: "choice" | "ai"
+  aiPrompt: string
+}
+
+type QuizPreviewState = {
+  started: boolean
+  currentIndex: number
+  selectedAlternativeIndexes: Record<number, number>
+}
+
 type GenerationResponsePayload = {
   operation?: ActivityOperation
   activity?: unknown
@@ -181,6 +199,48 @@ function buildUserMessage(prompt: string, attachments: UploadedAttachment[]) {
   }
 
   return `Gerar atividade usando ${attachments.length} anexos enviados.`
+}
+
+function buildClarificationFollowUpPrompt({
+  originalPrompt,
+  latestQuestion,
+  followUpPrompt,
+}: PendingClarificationContext & {
+  followUpPrompt: string
+}) {
+  return [
+    "Continuacao da mesma solicitacao anterior.",
+    "",
+    `Pedido original do usuario:\n${originalPrompt}`,
+    "",
+    `Pergunta de esclarecimento feita pela IA:\n${latestQuestion}`,
+    "",
+    `Resposta atual do usuario:\n${followUpPrompt}`,
+    "",
+    "Trate a resposta atual como complemento do pedido original, nao como uma nova solicitacao isolada.",
+  ].join("\n")
+}
+
+function shouldTreatClarificationReplyAsNewRequest(prompt: string) {
+  const trimmedPrompt = prompt.trim()
+
+  if (!trimmedPrompt) {
+    return false
+  }
+
+  if (/\[(tipo|dificuldade|quantidade):/i.test(trimmedPrompt)) {
+    return true
+  }
+
+  if (trimmedPrompt.split(/\s+/).length >= 3 && !/^(sim|nao|não|ok|pode|segue|continua|continue|com foco|foca|usa|utilize)\b/i.test(trimmedPrompt)) {
+    return true
+  }
+
+  return false
+}
+
+function formatQuestionAlternativesForPrompt(question: QuizQuestion) {
+  return question.alternatives.map((alternative) => `${alternative.label}. ${alternative.text}`).join("\n")
 }
 
 function isLocalDebugHost(_hostname: string) {
@@ -450,6 +510,14 @@ export default function HomePage() {
   const [streamingPreviewAttempt, setStreamingPreviewAttempt] = useState<number | null>(null)
   const [streamingPreviewModel, setStreamingPreviewModel] = useState<string | null>(null)
   const [streamingPhase, setStreamingPhase] = useState<string | null>(null)
+  const [pendingClarificationContext, setPendingClarificationContext] =
+    useState<PendingClarificationContext | null>(null)
+  const [addContentModal, setAddContentModal] = useState<AddContentModalState | null>(null)
+  const [quizPreviewState, setQuizPreviewState] = useState<QuizPreviewState>({
+    started: false,
+    currentIndex: 0,
+    selectedAlternativeIndexes: {},
+  })
   const [detectedActivityType, setDetectedActivityType] = useState<"quiz" | "missao" | null>(null)
   const [userOverrideType, setUserOverrideType] = useState<"quiz" | "missao" | null>(null)
   
@@ -457,6 +525,7 @@ export default function HomePage() {
   const [selectedDifficulty, setSelectedDifficulty] = useState<string | null>(null)
   const [selectedQuestionCount, setSelectedQuestionCount] = useState<number | null>(null)
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false)
+  const [advancedOptionsStage, setAdvancedOptionsStage] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
@@ -497,6 +566,30 @@ export default function HomePage() {
       setCurrentQuestion(Math.max(0, currentQuiz.quizQuestions.length - 1))
     }
   }, [currentQuestion, currentQuiz])
+
+  useEffect(() => {
+    setQuizPreviewState({
+      started: false,
+      currentIndex: 0,
+      selectedAlternativeIndexes: {},
+    })
+  }, [currentActivity])
+
+  useEffect(() => {
+    if (!showAdvancedOptions) {
+      setAdvancedOptionsStage(0)
+      return
+    }
+
+    setAdvancedOptionsStage(0)
+    const timers = [60, 170, 290, 420].map((delayMs, index) =>
+      setTimeout(() => setAdvancedOptionsStage(index + 1), delayMs)
+    )
+
+    return () => {
+      timers.forEach((timerId) => clearTimeout(timerId))
+    }
+  }, [showAdvancedOptions])
 
   // Detecta a intencao do usuario baseado no texto digitado
   useEffect(() => {
@@ -596,6 +689,18 @@ export default function HomePage() {
     }
     
     const prompt = promptParts.join(" ")
+    const treatClarificationReplyAsNewRequest =
+      pendingClarificationContext !== null &&
+      !currentActivity &&
+      shouldTreatClarificationReplyAsNewRequest(prompt)
+    const requestPrompt =
+      pendingClarificationContext && !currentActivity && !treatClarificationReplyAsNewRequest
+        ? buildClarificationFollowUpPrompt({
+            originalPrompt: pendingClarificationContext.originalPrompt,
+            latestQuestion: pendingClarificationContext.latestQuestion,
+            followUpPrompt: prompt,
+          })
+        : prompt
     
     setMessage("")
     setAttachments([])
@@ -604,6 +709,9 @@ export default function HomePage() {
     setSelectedDifficulty(null)
     setSelectedQuestionCount(null)
     setShowAdvancedOptions(false)
+    if (treatClarificationReplyAsNewRequest) {
+      setPendingClarificationContext(null)
+    }
     
     const userMessage: ChatMessage = {
       id: createEntityId("message"),
@@ -631,7 +739,7 @@ export default function HomePage() {
 
     try {
       const formData = new FormData()
-      formData.append("prompt", prompt)
+      formData.append("prompt", requestPrompt)
       formData.append(
         "recentMessages",
         JSON.stringify(messages.slice(-6).map((entry) => ({
@@ -742,15 +850,21 @@ export default function HomePage() {
         throw new Error("Nao foi possivel concluir a geracao em streaming.")
       }
 
-  if (resolvedPayload.operation?.action === "ask_clarification") {
-  setGenerationState("idle")
-  setStreamingPreviewText("")
-  setStreamingPreviewAttempt(null)
-  setStreamingPreviewModel(null)
-  setStreamingPhase(null)
+      if (resolvedPayload.operation?.action === "ask_clarification") {
+        setGenerationState("idle")
+        setStreamingPreviewText("")
+        setStreamingPreviewAttempt(null)
+        setStreamingPreviewModel(null)
+        setStreamingPhase(null)
+        const clarificationMessage =
+          resolvedPayload.assistantMessage ?? "Preciso de mais detalhes para continuar."
+        setPendingClarificationContext((previousContext) => ({
+          originalPrompt: previousContext?.originalPrompt ?? prompt,
+          latestQuestion: clarificationMessage,
+        }))
         replaceAssistantMessage(
           pendingMessageId,
-          resolvedPayload.assistantMessage ?? "Preciso de mais detalhes para continuar."
+          clarificationMessage
         )
         if (resolvedPayload.debug && isLocalDebugMode) {
           setShowDebugPanel(true)
@@ -764,15 +878,16 @@ export default function HomePage() {
           : activitySchema.parse(resolvedPayload.activity)
 
       setCurrentActivity(generatedActivity)
+      setPendingClarificationContext(null)
       setCurrentQuestion(0)
       setQuizTab(generatedActivity.type === "quiz" ? "questoes" : "informacoes")
-  setViewMode("creating")
-  setRightPanel("editor")
-  setGenerationState("idle")
-  setStreamingPreviewText("")
-  setStreamingPreviewAttempt(null)
-  setStreamingPreviewModel(null)
-  setStreamingPhase(null)
+      setViewMode("creating")
+      setRightPanel("editor")
+      setGenerationState("idle")
+      setStreamingPreviewText("")
+      setStreamingPreviewAttempt(null)
+      setStreamingPreviewModel(null)
+      setStreamingPhase(null)
       replaceAssistantMessage(
         pendingMessageId,
         resolvedPayload.assistantMessage ?? generatedActivity.teacherMessage
@@ -991,6 +1106,341 @@ export default function HomePage() {
     })
   }
 
+  const openAddQuestionModal = () => {
+    if (!currentQuiz) {
+      return
+    }
+
+    if (currentQuiz.quizQuestions.length >= 10) {
+      toast.error("O quiz pode ter no maximo 10 questoes.")
+      return
+    }
+
+    setAddContentModal({
+      kind: "question",
+      questionIndex: null,
+      step: "choice",
+      aiPrompt: "",
+    })
+  }
+
+  const openAddAlternativeModal = (questionIndex: number) => {
+    if (!currentQuiz) {
+      return
+    }
+
+    const targetQuestion = currentQuiz.quizQuestions[questionIndex]
+
+    if (!targetQuestion) {
+      return
+    }
+
+    if (targetQuestion.alternatives.length >= 6) {
+      toast.error("Cada questao pode ter no maximo 6 alternativas.")
+      return
+    }
+
+    setAddContentModal({
+      kind: "alternative",
+      questionIndex,
+      step: "choice",
+      aiPrompt: "",
+    })
+  }
+
+  const closeAddContentModal = () => {
+    if (generationState === "loading") {
+      return
+    }
+
+    setAddContentModal(null)
+  }
+
+  const continueAddContentWithAi = () => {
+    setAddContentModal((previousState) =>
+      previousState
+        ? {
+            ...previousState,
+            step: "ai",
+          }
+        : previousState
+    )
+  }
+
+  const updateAddContentAiPrompt = (value: string) => {
+    setAddContentModal((previousState) =>
+      previousState
+        ? {
+            ...previousState,
+            aiPrompt: value,
+          }
+        : previousState
+    )
+  }
+
+  const handleManualAddContent = () => {
+    if (!addContentModal) {
+      return
+    }
+
+    if (addContentModal.kind === "question") {
+      addQuestion()
+      setAddContentModal(null)
+      toast.success("Questao adicionada manualmente.")
+      return
+    }
+
+    if (addContentModal.questionIndex === null) {
+      return
+    }
+
+    addAlternative(addContentModal.questionIndex)
+    setAddContentModal(null)
+    toast.success("Alternativa adicionada manualmente.")
+  }
+
+  const buildEditorAiPrompt = (modalState: AddContentModalState, activity: QuizActivity) => {
+    const extraGuidance = modalState.aiPrompt.trim()
+
+    if (modalState.kind === "question") {
+      return [
+        "No quiz atual, adicione 1 nova questao sem recriar ou alterar as questoes existentes.",
+        "Mantenha o mesmo tema, nivel de dificuldade, estilo e distribuicao das alternativas do quiz atual.",
+        "Use o contexto ja existente da atividade para criar uma questao coerente e pronta para uso.",
+        extraGuidance ? `Instrucao opcional do professor:\n${extraGuidance}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+    }
+
+    const questionIndex = modalState.questionIndex ?? 0
+    const targetQuestion = activity.quizQuestions[questionIndex]
+
+    if (!targetQuestion) {
+      return ""
+    }
+
+    return [
+      `Atualize apenas a questao de id "${targetQuestion.id}" para adicionar 1 nova alternativa errada plausivel.`,
+      "Preserve o enunciado, mantenha as alternativas existentes e mantenha a alternativa correta atual como correta.",
+      "Nao remova alternativas e nao altere as outras questoes do quiz.",
+      `Enunciado atual:\n${targetQuestion.enunciado}`,
+      `Alternativas atuais:\n${formatQuestionAlternativesForPrompt(targetQuestion)}`,
+      extraGuidance ? `Instrucao opcional do professor:\n${extraGuidance}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+  }
+
+  const handleAiAddContent = async () => {
+    if (!addContentModal || !currentQuiz) {
+      return
+    }
+
+    const prompt = buildEditorAiPrompt(addContentModal, currentQuiz)
+
+    if (!prompt) {
+      toast.error("Nao foi possivel montar o prompt para essa edicao.")
+      return
+    }
+
+    const baseActivity = activitySchema.parse(currentQuiz)
+    const userMessageContent =
+      addContentModal.kind === "question"
+        ? `Adicionar questao com IA.${addContentModal.aiPrompt.trim() ? ` ${addContentModal.aiPrompt.trim()}` : ""}`
+        : `Adicionar alternativa com IA na questao ${((addContentModal.questionIndex ?? 0) + 1).toString()}.${addContentModal.aiPrompt.trim() ? ` ${addContentModal.aiPrompt.trim()}` : ""}`
+    const pendingMessageId = createEntityId("message")
+
+    setAddContentModal(null)
+    setMessages((previousMessages) => [
+      ...previousMessages,
+      {
+        id: createEntityId("message"),
+        role: "user",
+        content: userMessageContent,
+      },
+      {
+        id: pendingMessageId,
+        role: "ai",
+        content: "Ajustando o quiz com a IA...",
+      },
+    ])
+    setGenerationState("loading")
+    setGenerationError(null)
+    setLatestGenerationDebug(null)
+    setStreamingPreviewText("")
+    setStreamingPreviewAttempt(null)
+    setStreamingPreviewModel(null)
+    setStreamingPhase(null)
+
+    try {
+      const formData = new FormData()
+      formData.append("prompt", prompt)
+      formData.append(
+        "recentMessages",
+        JSON.stringify(
+          messages.slice(-6).map((entry) => ({
+            role: entry.role,
+            content: entry.content,
+          }))
+        )
+      )
+      formData.append("currentActivity", JSON.stringify(baseActivity))
+
+      const response = await fetch("/api/generate-activity", {
+        method: "POST",
+        headers: {
+          "x-gamefik-stream-preview": "1",
+        },
+        body: formData,
+      })
+
+      let finalPayload: GenerationResponsePayload | null = null
+      let streamedError: { error: string; details?: string | null; debug?: GenerationDebugPayload | null } | null =
+        null
+
+      await readStreamingEvents(response, (streamEvent) => {
+        switch (streamEvent.type) {
+          case "phase_update":
+            setStreamingPhase(streamEvent.data.phase)
+            setStreamingPreviewText((previousText) =>
+              `${previousText}${previousText.length > 0 ? "\n\n" : ""}[${streamEvent.data.phase}] ${streamEvent.data.message}\n`
+            )
+            break
+          case "session":
+            setCurrentModel(streamEvent.data.model)
+            break
+          case "attempt_start":
+            setStreamingPreviewAttempt(streamEvent.data.attemptNumber)
+            setStreamingPreviewModel(streamEvent.data.model)
+            setStreamingPreviewText((previousText) =>
+              previousText.length > 0
+                ? `${previousText}\n\n---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug)} ----\n`
+                : `---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug)} ----\n`
+            )
+            break
+          case "preview_delta":
+            setStreamingPreviewAttempt(streamEvent.data.attemptNumber)
+            setStreamingPreviewModel(streamEvent.data.model)
+            setStreamingPreviewText((previousText) => previousText + streamEvent.data.textDelta)
+            break
+          case "final_result":
+            finalPayload = {
+              operation: streamEvent.data.operation,
+              activity: streamEvent.data.activity,
+              assistantMessage: streamEvent.data.assistantMessage,
+              model: streamEvent.data.model,
+              debug: streamEvent.data.debug ?? undefined,
+            }
+            break
+          case "final_error":
+            streamedError = {
+              error: streamEvent.data.error,
+              details: streamEvent.data.details,
+              debug: streamEvent.data.debug,
+            }
+            break
+          default:
+            break
+        }
+      })
+
+      const resolvedPayload = finalPayload as GenerationResponsePayload | null
+      const resolvedStreamedError = streamedError as {
+        error: string
+        details?: string | null
+        debug?: GenerationDebugPayload | null
+      } | null
+
+      if (resolvedPayload?.debug) {
+        setLatestGenerationDebug(resolvedPayload.debug)
+      }
+
+      if (resolvedPayload?.model || resolvedPayload?.debug?.model) {
+        setCurrentModel(
+          resolvedPayload?.model ??
+            resolvedPayload?.debug?.finalModel ??
+            resolvedPayload?.debug?.model ??
+            null
+        )
+      }
+
+      if (resolvedStreamedError) {
+        if (resolvedStreamedError.debug) {
+          setLatestGenerationDebug(resolvedStreamedError.debug)
+        }
+        if (resolvedStreamedError.debug && isLocalDebugMode) {
+          setShowDebugPanel(true)
+        }
+        throw new Error(resolvedStreamedError.error)
+      }
+
+      if (!resolvedPayload?.operation) {
+        throw new Error("Nao foi possivel concluir a edicao com IA.")
+      }
+
+      if (resolvedPayload.operation.action === "ask_clarification") {
+        const clarificationMessage =
+          resolvedPayload.assistantMessage ?? "Preciso de mais detalhes para continuar."
+        replaceAssistantMessage(pendingMessageId, clarificationMessage)
+        setGenerationState("idle")
+        setStreamingPreviewText("")
+        setStreamingPreviewAttempt(null)
+        setStreamingPreviewModel(null)
+        setStreamingPhase(null)
+        toast.error("A IA pediu mais contexto para concluir essa adicao.")
+        if (resolvedPayload.debug && isLocalDebugMode) {
+          setShowDebugPanel(true)
+        }
+        return
+      }
+
+      const nextActivity = activitySchema.parse(applyActivityOperation(baseActivity, resolvedPayload.operation))
+      setCurrentActivity(nextActivity)
+      if (addContentModal.kind === "question") {
+        setCurrentQuestion(nextActivity.type === "quiz" ? nextActivity.quizQuestions.length - 1 : 0)
+      }
+      setGenerationState("idle")
+      setStreamingPreviewText("")
+      setStreamingPreviewAttempt(null)
+      setStreamingPreviewModel(null)
+      setStreamingPhase(null)
+      replaceAssistantMessage(
+        pendingMessageId,
+        resolvedPayload.assistantMessage ??
+          (addContentModal.kind === "question"
+            ? "Adicionei uma nova questao com a IA."
+            : "Adicionei uma nova alternativa com a IA.")
+      )
+      toast.success(
+        addContentModal.kind === "question"
+          ? "Questao adicionada com ajuda da IA."
+          : "Alternativa adicionada com ajuda da IA."
+      )
+      if (resolvedPayload.debug && isLocalDebugMode) {
+        setShowDebugPanel(true)
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Nao foi possivel editar a atividade no momento."
+      const normalizedError = normalizeUserFacingError(errorMessage)
+
+      setGenerationState("error")
+      setGenerationError(normalizedError)
+      setStreamingPreviewText("")
+      setStreamingPreviewAttempt(null)
+      setStreamingPreviewModel(null)
+      setStreamingPhase(null)
+      replaceAssistantMessage(
+        pendingMessageId,
+        `${normalizedError.title}. ${normalizedError.description}${
+          normalizedError.suggestion ? ` ${normalizedError.suggestion}` : ""
+        }`
+      )
+      toast.error(normalizedError.title)
+    }
+  }
+
   const removeAlternative = (questionIndex: number, alternativeIndex: number) => {
     updateQuizQuestion(questionIndex, (question) => {
       if (question.alternatives.length <= 2) {
@@ -1015,6 +1465,43 @@ export default function HomePage() {
         alternatives: normalizedAlternatives,
       }
     })
+  }
+
+  const startQuizPreview = () => {
+    setQuizPreviewState({
+      started: true,
+      currentIndex: 0,
+      selectedAlternativeIndexes: {},
+    })
+  }
+
+  const restartQuizPreview = () => {
+    setQuizPreviewState({
+      started: false,
+      currentIndex: 0,
+      selectedAlternativeIndexes: {},
+    })
+  }
+
+  const selectQuizPreviewAlternative = (questionIndex: number, alternativeIndex: number) => {
+    setQuizPreviewState((previousState) => ({
+      ...previousState,
+      selectedAlternativeIndexes: {
+        ...previousState.selectedAlternativeIndexes,
+        [questionIndex]: alternativeIndex,
+      },
+    }))
+  }
+
+  const goToNextQuizPreviewQuestion = () => {
+    if (!currentQuiz) {
+      return
+    }
+
+    setQuizPreviewState((previousState) => ({
+      ...previousState,
+      currentIndex: Math.min(previousState.currentIndex + 1, currentQuiz.quizQuestions.length - 1),
+    }))
   }
 
   const saveCurrentActivity = () => {
@@ -1068,7 +1555,7 @@ export default function HomePage() {
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
             <Sparkles className="h-3.5 w-3.5 animate-spin-smooth" />
-            Preview ao vivo
+            Processando...
           </span>
           <span className="flex items-center gap-1">
             <span className="h-1.5 w-1.5 rounded-full bg-primary animate-dots-1" />
@@ -1146,6 +1633,121 @@ export default function HomePage() {
         <p className="mt-3 text-xs font-medium text-muted-foreground animate-fade-in" style={{ animationDelay: "0.3s" }}>
           Responda no campo acima e eu continuo exatamente daqui.
         </p>
+      </div>
+    )
+  }
+
+  const renderAddContentModal = () => {
+    if (!addContentModal || !currentQuiz) {
+      return null
+    }
+
+    const isAlternative = addContentModal.kind === "alternative"
+    const questionNumber =
+      isAlternative && addContentModal.questionIndex !== null ? addContentModal.questionIndex + 1 : null
+    const title = isAlternative ? "Adicionar alternativa" : "Adicionar questao"
+    const description = isAlternative
+      ? `Escolha como voce quer adicionar uma nova alternativa na questao ${questionNumber}.`
+      : "Escolha como voce quer adicionar uma nova questao ao quiz."
+
+    return (
+      <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+        <button
+          type="button"
+          aria-label="Fechar modal"
+          className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
+          onClick={closeAddContentModal}
+        />
+        <div className="relative z-[81] w-full max-w-xl overflow-hidden rounded-[28px] border border-primary/20 bg-card shadow-2xl">
+          <div className="border-b border-border/70 bg-gradient-to-r from-primary/10 via-primary/5 to-transparent px-6 py-5">
+            <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-primary">
+              <Sparkles className="h-3.5 w-3.5" />
+              Personalizar adicao
+            </div>
+            <h3 className="text-xl font-semibold text-foreground">{title}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{description}</p>
+          </div>
+
+          {addContentModal.step === "choice" ? (
+            <div className="grid gap-3 p-6 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={continueAddContentWithAi}
+                className="group rounded-2xl border border-primary/20 bg-primary/5 p-5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:bg-primary/10"
+              >
+                <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
+                  <Sparkles className="h-5 w-5" />
+                </div>
+                <p className="text-base font-semibold text-foreground">Com IA</p>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  A IA usa o contexto do quiz atual para criar uma nova {isAlternative ? "alternativa errada plausivel" : "questao coerente"}.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleManualAddContent}
+                className="group rounded-2xl border border-border bg-card p-5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-border/80 hover:bg-muted/40"
+              >
+                <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-muted text-foreground">
+                  <Pencil className="h-5 w-5" />
+                </div>
+                <p className="text-base font-semibold text-foreground">Manualmente</p>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                  Cria um campo vazio para voce preencher e ajustar no editor.
+                </p>
+              </button>
+            </div>
+          ) : (
+            <div className="p-6">
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                Instrucao opcional para a IA
+              </label>
+              <textarea
+                value={addContentModal.aiPrompt}
+                onChange={(event) => updateAddContentAiPrompt(event.target.value)}
+                placeholder={
+                  isAlternative
+                    ? "Ex: deixe a nova alternativa mais sutil e plausivel."
+                    : "Ex: crie uma questao mais aplicada e interdisciplinar."
+                }
+                rows={4}
+                className="w-full resize-none rounded-2xl border border-border bg-background px-4 py-3 text-sm leading-relaxed text-foreground outline-none transition-all duration-200 placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/30"
+              />
+              <p className="mt-2 text-xs text-muted-foreground">
+                Se quiser, deixe em branco. A IA pode criar usando apenas o contexto atual do quiz.
+              </p>
+
+              <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAddContentModal((previousState) =>
+                      previousState
+                        ? {
+                            ...previousState,
+                            step: "choice",
+                          }
+                        : previousState
+                    )
+                  }
+                  disabled={generationState === "loading"}
+                  className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAiAddContent}
+                  disabled={generationState === "loading"}
+                  className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/20 transition-all duration-200 hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {generationState === "loading" ? "Gerando..." : "Gerar com IA"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     )
   }
@@ -1642,7 +2244,7 @@ export default function HomePage() {
   }
 
   const renderInitialView = () => (
-    <div className="relative flex min-h-[calc(100vh-4rem)] flex-1 flex-col items-center justify-center overflow-hidden px-4 py-10">
+    <div className="relative flex min-h-screen flex-1 flex-col items-center justify-center overflow-hidden px-4 py-10">
       <div className="pointer-events-none absolute inset-0">
         <Image
           src="/images/chat-background.jpg"
@@ -1745,9 +2347,16 @@ export default function HomePage() {
                 </button>
                 
                 {showAdvancedOptions && (
-                  <div className="mt-3 flex flex-wrap items-center gap-2 animate-fade-in">
+                  <div className="mt-3 flex flex-wrap items-center gap-2 origin-top animate-fade-in-up">
                     {/* Tipo de atividade */}
-                    <div className="relative">
+                    <div
+                      className={cn(
+                        "relative transition-all duration-300",
+                        advancedOptionsStage >= 1
+                          ? "translate-y-0 opacity-100"
+                          : "translate-y-2 opacity-0"
+                      )}
+                    >
                       <select
                         value={userOverrideType || ""}
                         onChange={(e) => setUserOverrideType(e.target.value as "quiz" | "missao" | null || null)}
@@ -1761,7 +2370,14 @@ export default function HomePage() {
                     </div>
 
                     {/* Dificuldade */}
-                    <div className="relative">
+                    <div
+                      className={cn(
+                        "relative transition-all duration-300",
+                        advancedOptionsStage >= 2
+                          ? "translate-y-0 opacity-100"
+                          : "translate-y-2 opacity-0"
+                      )}
+                    >
                       <select
                         value={selectedDifficulty || ""}
                         onChange={(e) => setSelectedDifficulty(e.target.value || null)}
@@ -1781,7 +2397,14 @@ export default function HomePage() {
 
                     {/* Quantidade de questoes (apenas para quiz) */}
                     {(userOverrideType === "quiz" || detectedActivityType === "quiz" || (!userOverrideType && !detectedActivityType)) && (
-                      <div className="relative animate-fade-in">
+                      <div
+                        className={cn(
+                          "relative transition-all duration-300",
+                          advancedOptionsStage >= 3
+                            ? "translate-y-0 opacity-100"
+                            : "translate-y-2 opacity-0"
+                        )}
+                      >
                         <select
                           value={selectedQuestionCount || ""}
                           onChange={(e) => setSelectedQuestionCount(e.target.value ? Number(e.target.value) : null)}
@@ -1807,7 +2430,12 @@ export default function HomePage() {
                           setSelectedQuestionCount(null)
                           setUserOverrideType(null)
                         }}
-                        className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        className={cn(
+                          "flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-all duration-300 hover:bg-muted hover:text-foreground",
+                          advancedOptionsStage >= 4
+                            ? "translate-y-0 opacity-100"
+                            : "translate-y-2 opacity-0"
+                        )}
                       >
                         <X className="h-3 w-3" />
                         Limpar
@@ -2029,7 +2657,7 @@ export default function HomePage() {
               </div>
               <button
                 type="button"
-                onClick={addQuestion}
+                  onClick={openAddQuestionModal}
                 className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-all duration-300 hover:bg-sidebar-accent hover:text-foreground hover:scale-110 active:scale-95"
                 title="Adicionar questao"
               >
@@ -2157,7 +2785,7 @@ export default function HomePage() {
 
                 <button
                   type="button"
-                  onClick={() => addAlternative(currentQuestion)}
+                  onClick={() => openAddAlternativeModal(currentQuestion)}
                   className="mt-3 flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-all duration-200 hover:text-foreground hover:translate-x-1 active:scale-95"
                 >
                   <Plus className="h-4 w-4 transition-transform duration-200 group-hover:rotate-90" />
@@ -2316,7 +2944,28 @@ export default function HomePage() {
     }
 
     const quizQuestionCount = currentQuiz?.quizQuestions.length ?? 0
-    const previewQuestion = currentQuiz?.quizQuestions[0] ?? null
+    const activePreviewQuestion =
+      currentQuiz && quizPreviewState.started
+        ? currentQuiz.quizQuestions[quizPreviewState.currentIndex] ?? null
+        : null
+    const selectedPreviewAlternativeIndex =
+      activePreviewQuestion && quizPreviewState.started
+        ? quizPreviewState.selectedAlternativeIndexes[quizPreviewState.currentIndex] ?? null
+        : null
+    const selectedPreviewAlternative =
+      activePreviewQuestion && selectedPreviewAlternativeIndex !== null
+        ? activePreviewQuestion.alternatives[selectedPreviewAlternativeIndex] ?? null
+        : null
+    const answeredPreviewQuestionsCount = Object.keys(quizPreviewState.selectedAlternativeIndexes).length
+    const previewCorrectAnswersCount =
+      currentQuiz?.quizQuestions.reduce((total, question, questionIndex) => {
+        const selectedAlternativeIndex = quizPreviewState.selectedAlternativeIndexes[questionIndex]
+        if (selectedAlternativeIndex === undefined) {
+          return total
+        }
+
+        return question.alternatives[selectedAlternativeIndex]?.correct ? total + 1 : total
+      }, 0) ?? 0
 
     return (
       <div className="flex flex-1 flex-col items-center justify-center overflow-hidden p-6">
@@ -2365,22 +3014,6 @@ export default function HomePage() {
                     </span>
                   </div>
 
-                  <div className="mb-4 flex items-center gap-2">
-                    <div className="relative h-8 w-8 overflow-hidden rounded-full bg-gradient-to-br from-amber-100 to-orange-100">
-                      <Image
-                        src="/images/characters.png"
-                        alt="Professor"
-                        fill
-                        className="object-cover"
-                        sizes="32px"
-                      />
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-gray-500">Criado por</p>
-                      <p className="text-sm font-medium text-gray-900">Professor Gamefik</p>
-                    </div>
-                  </div>
-
                   <div className="mb-4">
                     <p className="text-xs font-semibold text-gray-900">Descricao</p>
                     <p className="text-sm text-gray-600">{currentActivity.description}</p>
@@ -2400,25 +3033,97 @@ export default function HomePage() {
                     </div>
                   )}
 
-                  {currentActivity.type === "quiz" && previewQuestion ? (
-                    <div className="mb-5 rounded-xl bg-slate-50 p-3 animate-fade-in-up">
-                      <p className="mb-2 text-xs font-semibold text-slate-900">
-                        Questao 1
-                      </p>
-                      <p className="mb-3 text-sm text-slate-700">{previewQuestion.enunciado}</p>
-                      <div className="space-y-2">
-                        {previewQuestion.alternatives.map((alternative, index) => (
-                          <div
-                            key={alternative.id}
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 animate-fade-in-up opacity-0 transition-all duration-200 hover:border-primary/30 hover:bg-slate-50"
-                            style={{ animationDelay: `${index * 0.08}s` }}
-                          >
-                            <span className="mr-2 font-semibold">{alternative.label}.</span>
-                            {alternative.text}
+                  {currentActivity.type === "quiz" ? (
+                    quizPreviewState.started && activePreviewQuestion ? (
+                      <div className="mb-5 animate-fade-in-up">
+                        <div className="mb-3 flex items-center justify-between text-xs font-semibold text-slate-500">
+                          <span>
+                            Questao {quizPreviewState.currentIndex + 1} de {currentQuiz.quizQuestions.length}
+                          </span>
+                          <span>
+                            {answeredPreviewQuestionsCount}/{currentQuiz.quizQuestions.length} respondidas
+                          </span>
+                        </div>
+                        <div className="mb-4 rounded-xl bg-slate-50 p-4">
+                          <p className="mb-4 text-sm font-semibold leading-relaxed text-slate-900">
+                            {activePreviewQuestion.enunciado}
+                          </p>
+                          <div className="space-y-2">
+                            {activePreviewQuestion.alternatives.map((alternative, index) => {
+                              const isSelected = selectedPreviewAlternativeIndex === index
+                              return (
+                                <button
+                                  key={alternative.id}
+                                  type="button"
+                                  onClick={() =>
+                                    selectQuizPreviewAlternative(quizPreviewState.currentIndex, index)
+                                  }
+                                  className={cn(
+                                    "w-full rounded-xl border px-3 py-3 text-left text-sm transition-all duration-200",
+                                    isSelected
+                                      ? "border-primary bg-primary/10 text-foreground shadow-sm"
+                                      : "border-slate-200 bg-white text-slate-700 hover:border-primary/30 hover:bg-slate-50"
+                                  )}
+                                >
+                                  <span className="mr-2 font-semibold">{alternative.label}.</span>
+                                  {alternative.text}
+                                </button>
+                              )
+                            })}
                           </div>
-                        ))}
+                        </div>
+
+                        {selectedPreviewAlternative ? (
+                          <div
+                            className={cn(
+                              "mb-4 rounded-xl px-3 py-3 text-xs font-medium",
+                              selectedPreviewAlternative.correct
+                                ? "bg-emerald-50 text-emerald-700"
+                                : "bg-rose-50 text-rose-700"
+                            )}
+                          >
+                            {selectedPreviewAlternative.correct
+                              ? "Boa! Essa e a alternativa correta."
+                              : "Essa nao e a correta. Voce pode avancar mesmo assim ou trocar sua resposta."}
+                          </div>
+                        ) : null}
+
+                        {quizPreviewState.currentIndex === currentQuiz.quizQuestions.length - 1 ? (
+                          <div className="space-y-3">
+                            <div className="rounded-xl bg-slate-900 px-4 py-3 text-sm text-white">
+                              Resultado parcial: {previewCorrectAnswersCount} de {currentQuiz.quizQuestions.length} acertos
+                            </div>
+                            <button
+                              type="button"
+                              onClick={restartQuizPreview}
+                              className="flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-white py-3 text-sm font-semibold text-foreground transition-all duration-200 hover:bg-slate-50"
+                            >
+                              Reiniciar preview
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={goToNextQuizPreviewQuestion}
+                            disabled={selectedPreviewAlternativeIndex === null}
+                            className={cn(
+                              "flex w-full items-center justify-center gap-2 rounded-xl py-4 text-base font-semibold text-white transition-all duration-200",
+                              selectedPreviewAlternativeIndex === null
+                                ? "cursor-not-allowed bg-slate-300"
+                                : "bg-primary hover:scale-[1.02] hover:shadow-lg active:scale-[0.98]"
+                            )}
+                          >
+                            Proxima questao
+                          </button>
+                        )}
                       </div>
-                    </div>
+                    ) : (
+                      <div className="mb-5 rounded-xl bg-slate-50 p-4 text-center animate-fade-in-up">
+                        <p className="text-sm font-medium text-slate-700">
+                          Toque em &quot;Jogar este Quiz&quot; para iniciar a experiencia do aluno.
+                        </p>
+                      </div>
+                    )
                   ) : (
                     <div className="mb-5 flex items-start gap-2 rounded-lg bg-amber-50 p-3">
                       <div className="relative h-6 w-6 shrink-0 overflow-hidden rounded-full bg-gradient-to-br from-amber-100 to-orange-100">
@@ -2434,9 +3139,34 @@ export default function HomePage() {
                     </div>
                   )}
 
-                  <button className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 text-base font-semibold text-white transition-all duration-200 hover:scale-[1.02] hover:shadow-lg active:scale-[0.98] animate-fade-in-up" style={{ animationDelay: "0.3s" }}>
-                    {currentActivity.type === "quiz" ? "Jogar este Quiz" : "Iniciar Missao"}
+                  <button
+                    type="button"
+                    onClick={currentActivity.type === "quiz" ? startQuizPreview : undefined}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 text-base font-semibold text-white transition-all duration-200 hover:scale-[1.02] hover:shadow-lg active:scale-[0.98] animate-fade-in-up"
+                    style={{ animationDelay: "0.3s" }}
+                  >
+                    {currentActivity.type === "quiz"
+                      ? quizPreviewState.started
+                        ? "Refazer preview"
+                        : "Jogar este Quiz"
+                      : "Iniciar Missao"}
                   </button>
+
+                  <div className="mt-4 flex items-center gap-2">
+                    <div className="relative h-8 w-8 overflow-hidden rounded-full bg-gradient-to-br from-amber-100 to-orange-100">
+                      <Image
+                        src="/images/characters.png"
+                        alt="Professor"
+                        fill
+                        className="object-cover"
+                        sizes="32px"
+                      />
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-gray-500">Criado por</p>
+                      <p className="text-sm font-medium text-gray-900">Professor Gamefik</p>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -2455,13 +3185,14 @@ export default function HomePage() {
       <>
         {renderInitialView()}
         {renderDebugControls()}
+        {renderAddContentModal()}
       </>
     )
   }
 
   return (
     <>
-      <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-background">
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
         <div className="flex min-h-0 flex-1">
           <div className="flex w-[390px] flex-col border-r border-border bg-card">
             <div className="flex-1 overflow-auto p-4">
@@ -2622,7 +3353,7 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div key={rightPanel} className="animate-fade-in">
+            <div key={rightPanel} className="flex min-h-0 flex-1 flex-col overflow-hidden animate-fade-in">
               {rightPanel === "editor"
                 ? currentActivity?.type === "quiz"
                   ? renderQuizEditor()
@@ -2633,6 +3364,7 @@ export default function HomePage() {
         </div>
       </div>
       {renderDebugControls()}
+      {renderAddContentModal()}
     </>
   )
 }

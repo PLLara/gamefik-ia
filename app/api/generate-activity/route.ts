@@ -4,7 +4,7 @@ import { z } from "zod"
 import { orchestrateActivityOperation, type OrchestrationEvent } from "@/lib/activity-orchestrator"
 import { activitySchema } from "@/lib/activity-schema"
 import { type GenerationDebugPayload } from "@/lib/generation-debug"
-import { GEMINI_API_VERSION, GEMINI_FALLBACK_MODEL, GEMINI_MODEL } from "@/lib/gemini"
+import { GEMINI_API_VERSION, GEMINI_MODEL } from "@/lib/gemini"
 
 export const runtime = "nodejs"
 
@@ -87,7 +87,7 @@ function createDebugPayload(includeDebug: boolean, requestHost: string | null) {
     requestHost,
     model: GEMINI_MODEL,
     finalModel: null,
-    fallbackModel: GEMINI_FALLBACK_MODEL === GEMINI_MODEL ? null : GEMINI_FALLBACK_MODEL,
+    fallbackModel: null,
     apiVersion: GEMINI_API_VERSION,
     systemInstruction: "",
     basePrompt: "",
@@ -317,7 +317,7 @@ export async function POST(request: Request) {
               type: "session",
               data: {
                 model: GEMINI_MODEL,
-                fallbackModel: GEMINI_FALLBACK_MODEL === GEMINI_MODEL ? null : GEMINI_FALLBACK_MODEL,
+                fallbackModel: null,
                 apiVersion: GEMINI_API_VERSION,
                 includeDebug,
               },

@@ -5,8 +5,6 @@ import { GoogleGenAI } from "@google/genai"
 const API_KEY_ENV_NAMES = ["GEMINI_API_KEY", "GOOGLE_API_KEY"] as const
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-3.1-pro-preview"
-export const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL?.trim() || "gemini-2.5-flash"
-export const GEMINI_FAST_MODEL = process.env.GEMINI_FAST_MODEL?.trim() || "gemini-2.5-flash"
 export const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION?.trim() || "v1beta"
 
 let cachedApiKey: string | null = null
@@ -95,4 +93,15 @@ export async function getGeminiClient() {
   })
 
   return cachedClient
+}
+
+export function getGeminiThinkingConfig(model: string) {
+  // Alguns modelos Pro exigem thinking habilitado e rejeitam budget zero.
+  if (/gemini-3\.1-pro/i.test(model)) {
+    return undefined
+  }
+
+  return {
+    thinkingBudget: 0,
+  }
 }

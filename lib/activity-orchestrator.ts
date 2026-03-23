@@ -33,10 +33,9 @@ import {
 } from "@/lib/generation-debug"
 import {
   GEMINI_API_VERSION,
-  GEMINI_FALLBACK_MODEL,
-  GEMINI_FAST_MODEL,
   GEMINI_MODEL,
   getGeminiClient,
+  getGeminiThinkingConfig,
 } from "@/lib/gemini"
 
 type RecentMessage = {
@@ -89,6 +88,7 @@ export type OrchestrationEvent =
 
 type StructuredStageResult<T> = {
   model: string
+  systemInstruction: string
   parsed: T
   promptText: string
   responseText: string
@@ -99,6 +99,7 @@ type StructuredStageResult<T> = {
 
 type ExecutorResult = {
   model: string
+  systemInstruction: string
   operation: ActivityOperation
   promptText: string
   responseText: string
@@ -126,15 +127,6 @@ type OrchestrationOptions = {
   debugPayload: GenerationDebugPayload | null
   emit?: (event: OrchestrationEvent) => void
 }
-
-const candidateModels = [GEMINI_MODEL, GEMINI_FALLBACK_MODEL].filter(
-  (modelName, index, array) => array.indexOf(modelName) === index
-)
-
-// Modelos rapidos para router/planner/reviewer (sem thinking)
-const fastModels = [GEMINI_FAST_MODEL, GEMINI_FALLBACK_MODEL].filter(
-  (modelName, index, array) => array.indexOf(modelName) === index
-)
 
 function toPlainJson<T>(value: T) {
   if (value === undefined) {
@@ -184,65 +176,108 @@ function pushWorkflowStage(
   })
 }
 
+function setDebugPromptContext(
+  debugPayload: GenerationDebugPayload | null,
+  systemInstruction: string,
+  promptText: string
+) {
+  if (!debugPayload) {
+    return
+  }
+
+  debugPayload.systemInstruction = systemInstruction
+  debugPayload.basePrompt = promptText
+}
+
+function getErrorMessage(error: unknown, fallbackMessage: string) {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message
+  }
+
+  return fallbackMessage
+}
+
+function toModelStageError(stage: DebugWorkflowStage["stage"], model: string, error: unknown) {
+  const message = getErrorMessage(error, `Falha ao executar a etapa ${stage}.`)
+
+  return new Error(`Falha na etapa ${stage} com o modelo ${model}: ${message}`)
+}
+
 async function callStructuredModel<T>({
-  models,
+  stage,
+  model,
   promptText,
   systemInstruction,
   jsonSchema,
   parser,
+  debugPayload,
 }: {
-  models: string[]
+  stage: DebugWorkflowStage["stage"]
+  model: string
   promptText: string
   systemInstruction: string
   jsonSchema: unknown
   parser: z.ZodSchema<T>
+  debugPayload: GenerationDebugPayload | null
 }) {
   const gemini = await getGeminiClient()
-  let lastError: unknown = null
+  const startedAt = new Date()
+  const startedAtMs = Date.now()
 
-  for (const model of models) {
-    const startedAt = new Date()
-    const startedAtMs = Date.now()
+  setDebugPromptContext(debugPayload, systemInstruction, promptText)
 
-    try {
-      const response = await gemini.models.generateContent({
-        model,
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: promptText }],
-          },
-        ],
-        config: {
-          temperature: 0,
-          responseMimeType: "application/json",
-          responseJsonSchema: jsonSchema,
-          systemInstruction,
-          // Desativa thinking para respostas mais rapidas
-          thinkingConfig: {
-            thinkingBudget: 0,
-          },
+  try {
+    const response = await gemini.models.generateContent({
+      model,
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: promptText }],
         },
-      })
+      ],
+      config: {
+        temperature: 0,
+        responseMimeType: "application/json",
+        responseJsonSchema: jsonSchema,
+        systemInstruction,
+        ...(getGeminiThinkingConfig(model)
+          ? {
+              thinkingConfig: getGeminiThinkingConfig(model),
+            }
+          : {}),
+      },
+    })
 
-      const responseText = response.text?.trim() ?? ""
-      const parsed = parser.parse(JSON.parse(responseText))
+    const responseText = response.text?.trim() ?? ""
+    const parsed = parser.parse(JSON.parse(responseText))
 
-      return {
-        model,
-        parsed,
-        promptText,
-        responseText,
-        startedAt: startedAt.toISOString(),
-        durationMs: Date.now() - startedAtMs,
-        usageMetadata: toPlainJson(response.usageMetadata),
-      } satisfies StructuredStageResult<T>
-    } catch (error) {
-      lastError = error
-    }
+    return {
+      model,
+      systemInstruction,
+      parsed,
+      promptText,
+      responseText,
+      startedAt: startedAt.toISOString(),
+      durationMs: Date.now() - startedAtMs,
+      usageMetadata: toPlainJson(response.usageMetadata),
+    } satisfies StructuredStageResult<T>
+  } catch (error) {
+    pushWorkflowStage(debugPayload, {
+      stage,
+      model,
+      startedAt: startedAt.toISOString(),
+      durationMs: Date.now() - startedAtMs,
+      systemInstruction,
+      promptText,
+      responseText: null,
+      parsedJson: null,
+      usageMetadata: null,
+      success: false,
+      error: getErrorMessage(error, `Falha ao executar a etapa ${stage}.`),
+    })
+
+    throw toModelStageError(stage, model, error)
   }
-
-  throw lastError ?? new Error("Falha ao obter resposta estruturada da IA.")
 }
 
 async function callExecutorStream({
@@ -251,115 +286,144 @@ async function callExecutorStream({
   attachmentParts,
   emit,
   attemptNumber,
+  debugPayload,
 }: {
   expectedAction: ActivityOperation["action"]
   promptText: string
   attachmentParts: Part[]
   emit?: (event: OrchestrationEvent) => void
   attemptNumber: number
+  debugPayload: GenerationDebugPayload | null
 }) {
   const gemini = await getGeminiClient()
-  let lastError: unknown = null
+  const model = GEMINI_MODEL
+  const startedAt = new Date()
+  const startedAtMs = Date.now()
+  const streamChunks: DebugStreamChunk[] = []
+  let responseText = ""
+  let lastChunk: Awaited<ReturnType<typeof stream.next>>["value"] | null = null
 
-  for (const model of candidateModels) {
-    const startedAt = new Date()
-    const startedAtMs = Date.now()
-    const streamChunks: DebugStreamChunk[] = []
+  setDebugPromptContext(debugPayload, executorSystemInstruction, promptText)
 
-    emit?.({
-      type: "attempt_start",
-      data: {
-        attemptNumber,
-        model,
+  emit?.({
+    type: "attempt_start",
+    data: {
+      attemptNumber,
+      model,
+      temperature: 0.15,
+    },
+  })
+
+  try {
+    const stream = await gemini.models.generateContentStream({
+      model,
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: promptText }, ...attachmentParts],
+        },
+      ],
+      config: {
         temperature: 0.15,
+        responseMimeType: "application/json",
+        responseJsonSchema: getActivityOperationJsonSchema(expectedAction),
+        systemInstruction: executorSystemInstruction,
+        ...(getGeminiThinkingConfig(model)
+          ? {
+              thinkingConfig: getGeminiThinkingConfig(model),
+            }
+          : {}),
       },
     })
 
-    try {
-      const stream = await gemini.models.generateContentStream({
-        model,
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: promptText }, ...attachmentParts],
-          },
-        ],
-        config: {
-          temperature: 0.15,
-          responseMimeType: "application/json",
-          responseJsonSchema: getActivityOperationJsonSchema(expectedAction),
-          systemInstruction: executorSystemInstruction,
-          // Desativa thinking para streaming mais rapido
-          thinkingConfig: {
-            thinkingBudget: 0,
-          },
-        },
-      })
+    let chunkIndex = 0
 
-      let responseText = ""
-      let lastChunk: Awaited<ReturnType<typeof stream.next>>["value"] | null = null
-      let chunkIndex = 0
+    for await (const chunk of stream) {
+      lastChunk = chunk
+      const textDelta = chunk.text ?? ""
 
-      for await (const chunk of stream) {
-        lastChunk = chunk
-        const textDelta = chunk.text ?? ""
-
-        if (!textDelta) {
-          continue
-        }
-
-        responseText += textDelta
-        chunkIndex += 1
-
-        const debugChunk: DebugStreamChunk = {
-          chunkIndex,
-          receivedAt: new Date().toISOString(),
-          textDelta,
-        }
-
-        streamChunks.push(debugChunk)
-        emit?.({
-          type: "preview_delta",
-          data: {
-            attemptNumber,
-            model,
-            textDelta,
-          },
-        })
+      if (!textDelta) {
+        continue
       }
 
-      const operation = activityOperationSchema.parse(JSON.parse(responseText))
+      responseText += textDelta
+      chunkIndex += 1
 
-      return {
-        model,
-        operation,
-        promptText,
-        responseText,
-        startedAt: startedAt.toISOString(),
-        durationMs: Date.now() - startedAtMs,
-        usageMetadata: toPlainJson(lastChunk?.usageMetadata),
-        streamChunks,
-      } satisfies ExecutorResult
-    } catch (error) {
-      lastError = error
+      const debugChunk: DebugStreamChunk = {
+        chunkIndex,
+        receivedAt: new Date().toISOString(),
+        textDelta,
+      }
+
+      streamChunks.push(debugChunk)
       emit?.({
-        type: "attempt_complete",
+        type: "preview_delta",
         data: {
           attemptNumber,
           model,
-          success: false,
-          durationMs: Date.now() - startedAtMs,
-          totalTokenCount: null,
-          normalizationError:
-            error instanceof Error
-              ? error.message
-              : "Falha ao executar a operacao com este modelo.",
+          textDelta,
         },
       })
     }
-  }
 
-  throw lastError ?? new Error("Falha ao executar a operacao com os modelos disponiveis.")
+    const operation = activityOperationSchema.parse(JSON.parse(responseText))
+
+    return {
+      model,
+      systemInstruction: executorSystemInstruction,
+      operation,
+      promptText,
+      responseText,
+      startedAt: startedAt.toISOString(),
+      durationMs: Date.now() - startedAtMs,
+      usageMetadata: toPlainJson(lastChunk?.usageMetadata),
+      streamChunks,
+    } satisfies ExecutorResult
+  } catch (error) {
+    const durationMs = Date.now() - startedAtMs
+    const normalizationError = getErrorMessage(error, "Falha ao executar a operacao com este modelo.")
+
+    if (debugPayload) {
+      debugPayload.attempts.push({
+        attemptNumber,
+        startedAt: startedAt.toISOString(),
+        durationMs,
+        systemInstruction: executorSystemInstruction,
+        promptText,
+        requestConfig: {
+          model,
+          apiVersion: GEMINI_API_VERSION,
+          temperature: 0.15,
+          responseMimeType: "application/json",
+        },
+        responseText: responseText || null,
+        responseId: null,
+        modelVersion: model,
+        usageMetadata: toPlainJson(lastChunk?.usageMetadata),
+        promptFeedback: null,
+        candidates: [],
+        streamChunks,
+        parsedResponseJson: null,
+        normalizedPayload: null,
+        success: false,
+        normalizationError,
+      })
+    }
+
+    emit?.({
+      type: "attempt_complete",
+      data: {
+        attemptNumber,
+        model,
+        success: false,
+        durationMs,
+        totalTokenCount: null,
+        normalizationError,
+      },
+    })
+
+    throw new Error(`Falha no executor com o modelo ${model}: ${normalizationError}`)
+  }
 }
 
 function buildAssistantMessage(
@@ -398,6 +462,54 @@ function buildAssistantMessage(
   return routerDecision.reason
 }
 
+function stripPromptMetadata(userPrompt: string) {
+  return userPrompt.replace(/\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim()
+}
+
+function isSpecificSourceDependentTopic(prompt: string) {
+  return (
+    /\b(manual|modelo|model|versao|versão|ficha tecnica|especifica(?:cao|ções)|pdf|documento|arquivo)\b/i.test(
+      prompt
+    ) ||
+    /\b[a-z]+\s?\d+(?:\.\d+)?\b/i.test(prompt) ||
+    /\bs-?design\b/i.test(prompt)
+  )
+}
+
+function getPreRoutingClarificationQuestion({
+  userPrompt,
+  currentActivity,
+  attachments,
+}: Pick<OrchestrationOptions, "userPrompt" | "currentActivity" | "attachments">) {
+  if (currentActivity || attachments.length > 0) {
+    return null
+  }
+
+  const strippedPrompt = stripPromptMetadata(userPrompt)
+
+  if (!strippedPrompt) {
+    return "Pode me dizer qual conteudo voce quer cobrar na atividade ou enviar um PDF/imagem de referencia?"
+  }
+
+  const wordCount = strippedPrompt.split(/\s+/).filter(Boolean).length
+  const hasInstructionalContext =
+    /\b(sobre|com base|baseado|a partir|usando|considere|explique|aborde|compare|inclua|objetivo|contexto|material|texto|artigo|capitulo|pdf|imagem|documento|manual|resumo|conteudo|tema)\b/i.test(
+      strippedPrompt
+    )
+  const looksLikeBareTopic =
+    wordCount <= 8 && !/[.!?]/.test(strippedPrompt) && !hasInstructionalContext
+
+  if (!looksLikeBareTopic) {
+    return null
+  }
+
+  if (!isSpecificSourceDependentTopic(strippedPrompt)) {
+    return null
+  }
+
+  return `Antes de montar a atividade sobre "${strippedPrompt}", preciso de uma base melhor para nao inventar conteudo. Envie um PDF/imagem ou descreva os topicos, fatos e recorte que devem ser cobrados.`
+}
+
 export async function orchestrateActivityOperation({
   userPrompt,
   currentActivity,
@@ -411,13 +523,65 @@ export async function orchestrateActivityOperation({
     type: "phase_update",
     data: {
       phase: "router",
-      model: GEMINI_FAST_MODEL,
+      model: GEMINI_MODEL,
       message: "Analisando a intencao do pedido...",
     },
   })
 
+  const preRoutingClarificationQuestion = getPreRoutingClarificationQuestion({
+    userPrompt,
+    currentActivity,
+    attachments,
+  })
+
+  if (preRoutingClarificationQuestion) {
+    const clarificationOperation = activityOperationSchema.parse({
+      action: "ask_clarification",
+      payload: {
+        question: preRoutingClarificationQuestion,
+      },
+    }) as Extract<ActivityOperation, { action: "ask_clarification" }>
+
+    if (debugPayload) {
+      debugPayload.systemInstruction = routerSystemInstruction
+      debugPayload.basePrompt = buildRouterPrompt({
+        userPrompt,
+        currentActivity,
+        attachments,
+        recentMessages,
+      })
+      debugPayload.finalOperation = toPlainJson(clarificationOperation)
+      debugPayload.finalNormalizedPayload = toPlainJson(clarificationOperation)
+    }
+
+    emit?.({
+      type: "phase_update",
+      data: {
+        phase: "clarification",
+        model: null,
+        message: "Pedido sem base suficiente; solicitando esclarecimento antes de gerar.",
+      },
+    })
+
+    return {
+      operation: clarificationOperation,
+      activity: currentActivity,
+      assistantMessage: clarificationOperation.payload.question,
+      model: GEMINI_MODEL,
+      routerDecision: normalizeRouterDecision({
+        action: "ask_clarification",
+        reason: "O pedido inicial nao trouxe base factual suficiente para gerar uma atividade confiavel.",
+        confidence: "high",
+        needsClarification: true,
+        clarificationQuestion: preRoutingClarificationQuestion,
+      }),
+      planner: null,
+    }
+  }
+
   const routerResult = await callStructuredModel({
-    models: fastModels,
+    stage: "router",
+    model: GEMINI_MODEL,
     promptText: buildRouterPrompt({
       userPrompt,
       currentActivity,
@@ -427,6 +591,7 @@ export async function orchestrateActivityOperation({
     systemInstruction: routerSystemInstruction,
     jsonSchema: routerDecisionJsonSchema,
     parser: routerDecisionSchema,
+    debugPayload,
   })
   const normalizedRouterDecision = normalizeRouterDecision(routerResult.parsed as RouterDecision)
 
@@ -435,6 +600,7 @@ export async function orchestrateActivityOperation({
     model: routerResult.model,
     startedAt: routerResult.startedAt,
     durationMs: routerResult.durationMs,
+    systemInstruction: routerResult.systemInstruction,
     promptText: routerResult.promptText,
     responseText: routerResult.responseText,
     parsedJson: toPlainJson(normalizedRouterDecision),
@@ -480,7 +646,8 @@ export async function orchestrateActivityOperation({
   }
 
   const plannerResult = await callStructuredModel({
-    models: fastModels,
+    stage: "planner",
+    model: GEMINI_MODEL,
     promptText: buildPlannerPrompt({
       userPrompt,
       currentActivity,
@@ -491,6 +658,7 @@ export async function orchestrateActivityOperation({
     systemInstruction: plannerSystemInstruction,
     jsonSchema: operationPlannerJsonSchema,
     parser: operationPlannerSchema,
+    debugPayload,
   })
   const normalizedPlanner = normalizePlannerDecision(plannerResult.parsed as OperationPlanner)
 
@@ -499,6 +667,7 @@ export async function orchestrateActivityOperation({
     model: plannerResult.model,
     startedAt: plannerResult.startedAt,
     durationMs: plannerResult.durationMs,
+    systemInstruction: plannerResult.systemInstruction,
     promptText: plannerResult.promptText,
     responseText: plannerResult.responseText,
     parsedJson: toPlainJson(normalizedPlanner),
@@ -540,12 +709,14 @@ export async function orchestrateActivityOperation({
       attachmentParts,
       emit,
       attemptNumber: executorAttemptNumber,
+      debugPayload,
     })
 
     const attemptDebug: DebugGenerationAttempt = {
       attemptNumber: executorAttemptNumber,
       startedAt: executorResult.startedAt,
       durationMs: executorResult.durationMs,
+      systemInstruction: executorResult.systemInstruction,
       promptText: executorResult.promptText,
       requestConfig: {
         model: executorResult.model,
@@ -574,13 +745,14 @@ export async function orchestrateActivityOperation({
       type: "phase_update",
       data: {
         phase: "reviewer",
-        model: GEMINI_FAST_MODEL,
+        model: GEMINI_MODEL,
         message: "Revisando se a operacao realmente cumpre o pedido...",
       },
     })
 
     const reviewerResult = await callStructuredModel({
-      models: fastModels,
+      stage: "reviewer",
+      model: GEMINI_MODEL,
       promptText: buildReviewerPrompt({
         userPrompt,
         currentActivity,
@@ -596,6 +768,7 @@ export async function orchestrateActivityOperation({
         approved: z.boolean(),
         feedback: z.string().trim().min(1).max(500),
       }),
+      debugPayload,
     })
 
     pushWorkflowStage(debugPayload, {
@@ -603,6 +776,7 @@ export async function orchestrateActivityOperation({
       model: reviewerResult.model,
       startedAt: reviewerResult.startedAt,
       durationMs: reviewerResult.durationMs,
+      systemInstruction: reviewerResult.systemInstruction,
       promptText: reviewerResult.promptText,
       responseText: reviewerResult.responseText,
       parsedJson: toPlainJson(reviewerResult.parsed),

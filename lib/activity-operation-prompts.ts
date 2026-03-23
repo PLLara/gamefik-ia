@@ -100,6 +100,9 @@ Regras:
 - se pedir para remover uma questao, use "remove_question";
 - se o pedido exigir recriar tudo, use "full_regeneration";
 - se o pedido estiver ambiguo ou faltar contexto critico, use "ask_clarification";
+- se for uma atividade nova sem anexo e sem atividade atual, e o pedido trouxer apenas um tema amplo de conhecimento geral, voce pode seguir com geracao normal;
+- use "ask_clarification" principalmente quando o pedido depender de fonte especifica, produto/modelo, documento, arquivo, contexto proprietario ou fatos muito particulares que nao possam ser inferidos com seguranca de conhecimento geral;
+- nunca assuma fatos, especificacoes, funcionalidades, caracteristicas de produto ou contexto tecnico que nao estejam no pedido, no historico, na atividade atual ou nos anexos;
 - responda apenas em JSON valido seguindo o schema.
 `.trim()
 
@@ -137,6 +140,7 @@ Regras:
 - informe quantidade de questoes a adicionar quando fizer sentido;
 - identifique alvo de questao quando fizer sentido;
 - informe os campos que precisam ser atualizados;
+- nao amplie o escopo com fatos novos que nao estejam ancorados no pedido, no historico, na atividade atual ou nos anexos;
 - responda apenas em JSON valido seguindo o schema.
 `.trim()
 
@@ -183,6 +187,9 @@ Regras essenciais:
 - "full_regeneration": so use a atividade inteira quando explicitamente necessario;
 - "ask_clarification": devolva apenas a pergunta de esclarecimento;
 - mantenha o conteudo em portugues do Brasil;
+- para temas educacionais amplos e comuns, voce pode gerar com base em conhecimento geral mesmo sem anexos;
+- baseie cada afirmacao apenas no pedido, no historico, na atividade atual e nos anexos;
+- nao invente especificacoes, funcionalidades, contexto tecnico, nomes proprios ou detalhes factuais ausentes das entradas fornecidas para produtos, documentos especificos ou temas proprietarios;
 - responda apenas em JSON valido seguindo o schema.
 `.trim()
 
@@ -231,6 +238,9 @@ Regras:
 - prefira operacoes parciais quando o pedido for parcial;
 - "append_questions" nao pode recriar o quiz inteiro;
 - "update_metadata" nao pode reescrever questoes;
+- rejeite quando a operacao inventar fatos, especificacoes de produto ou contexto nao sustentado pelo pedido, pela atividade atual, pelo historico ou pelos anexos;
+- se a solicitacao for uma atividade nova sobre tema amplo de conhecimento geral, nao reprove so por falta de anexo;
+- se a solicitacao depender de produto/modelo/documento/contexto especifico e faltarem dados, prefira reprovacao com feedback pedindo "ask_clarification" em vez de aprovar conteudo especulativo;
 - responda apenas em JSON valido.
 `.trim()
 

@@ -50,6 +50,7 @@ export type DebugWorkflowStage = {
   model: string
   startedAt: string
   durationMs: number
+  systemInstruction: string
   promptText: string
   responseText: string | null
   parsedJson: unknown
@@ -62,6 +63,7 @@ export type DebugGenerationAttempt = {
   attemptNumber: number
   startedAt: string
   durationMs: number
+  systemInstruction: string
   promptText: string
   requestConfig: DebugGenerationRequestConfig
   responseText: string | null
