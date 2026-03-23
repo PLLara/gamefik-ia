@@ -444,6 +444,7 @@ export default function HomePage() {
   const [streamingPreviewText, setStreamingPreviewText] = useState("")
   const [streamingPreviewAttempt, setStreamingPreviewAttempt] = useState<number | null>(null)
   const [streamingPreviewModel, setStreamingPreviewModel] = useState<string | null>(null)
+  const [streamingPhase, setStreamingPhase] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
@@ -529,12 +530,13 @@ export default function HomePage() {
         content: "Gerando atividade com a IA...",
       },
     ])
-    setGenerationState("loading")
-    setGenerationError(null)
-    setLatestGenerationDebug(null)
-    setStreamingPreviewText("")
-    setStreamingPreviewAttempt(null)
-    setStreamingPreviewModel(null)
+  setGenerationState("loading")
+  setGenerationError(null)
+  setLatestGenerationDebug(null)
+  setStreamingPreviewText("")
+  setStreamingPreviewAttempt(null)
+  setStreamingPreviewModel(null)
+  setStreamingPhase(null)
 
     try {
       const formData = new FormData()
@@ -570,6 +572,7 @@ export default function HomePage() {
       await readStreamingEvents(response, (streamEvent) => {
         switch (streamEvent.type) {
           case "phase_update":
+            setStreamingPhase(streamEvent.data.phase)
             setStreamingPreviewText((previousText) =>
               `${previousText}${
                 previousText.length > 0 ? "\n\n" : ""
@@ -648,11 +651,12 @@ export default function HomePage() {
         throw new Error("Nao foi possivel concluir a geracao em streaming.")
       }
 
-      if (resolvedPayload.operation?.action === "ask_clarification") {
-        setGenerationState("idle")
-        setStreamingPreviewText("")
-        setStreamingPreviewAttempt(null)
-        setStreamingPreviewModel(null)
+  if (resolvedPayload.operation?.action === "ask_clarification") {
+  setGenerationState("idle")
+  setStreamingPreviewText("")
+  setStreamingPreviewAttempt(null)
+  setStreamingPreviewModel(null)
+  setStreamingPhase(null)
         replaceAssistantMessage(
           pendingMessageId,
           resolvedPayload.assistantMessage ?? "Preciso de mais detalhes para continuar."
@@ -671,12 +675,13 @@ export default function HomePage() {
       setCurrentActivity(generatedActivity)
       setCurrentQuestion(0)
       setQuizTab(generatedActivity.type === "quiz" ? "questoes" : "informacoes")
-      setViewMode("creating")
-      setRightPanel("editor")
-      setGenerationState("idle")
-      setStreamingPreviewText("")
-      setStreamingPreviewAttempt(null)
-      setStreamingPreviewModel(null)
+  setViewMode("creating")
+  setRightPanel("editor")
+  setGenerationState("idle")
+  setStreamingPreviewText("")
+  setStreamingPreviewAttempt(null)
+  setStreamingPreviewModel(null)
+  setStreamingPhase(null)
       replaceAssistantMessage(
         pendingMessageId,
         resolvedPayload.assistantMessage ?? generatedActivity.teacherMessage
@@ -938,10 +943,31 @@ export default function HomePage() {
     }
   }
 
+  const getPhaseLabel = (phase: string | null) => {
+    switch (phase) {
+      case "router":
+        return "Analisando intencao..."
+      case "planner":
+        return "Planejando operacao..."
+      case "executor":
+        return "Gerando conteudo..."
+      case "reviewer":
+        return "Revisando qualidade..."
+      case "patch":
+        return "Aplicando alteracoes..."
+      case "clarification":
+        return "Preparando pergunta..."
+      default:
+        return "Iniciando..."
+    }
+  }
+
   const renderStreamingPreviewCard = () => {
     if (generationState !== "loading" && !streamingPreviewText) {
       return null
     }
+
+    const isGeneratingContent = streamingPhase === "executor" && streamingPreviewText.includes("----")
 
     return (
       <div className="animate-fade-in-up rounded-2xl border border-primary/20 bg-card/95 p-4 shadow-card backdrop-blur-sm">
@@ -955,6 +981,11 @@ export default function HomePage() {
             <span className="h-1.5 w-1.5 rounded-full bg-primary animate-dots-2" />
             <span className="h-1.5 w-1.5 rounded-full bg-primary animate-dots-3" />
           </span>
+          {streamingPhase && (
+            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-700 animate-pulse">
+              {getPhaseLabel(streamingPhase)}
+            </span>
+          )}
           {streamingPreviewAttempt ? (
             <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
               Tentativa {streamingPreviewAttempt}
@@ -966,8 +997,24 @@ export default function HomePage() {
             </span>
           ) : null}
         </div>
+        {!isGeneratingContent && streamingPhase && streamingPhase !== "executor" && (
+          <div className="mb-3 flex items-center gap-3 rounded-lg bg-muted/50 px-3 py-2">
+            <div className="flex gap-1">
+              <div className="h-2 w-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+              <div className="h-2 w-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+              <div className="h-2 w-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {streamingPhase === "router" && "A IA esta analisando seu pedido para entender a melhor forma de atende-lo..."}
+              {streamingPhase === "planner" && "Definindo a estrategia para criar ou modificar sua atividade..."}
+              {streamingPhase === "reviewer" && "Verificando se o conteudo gerado atende ao seu pedido..."}
+              {streamingPhase === "patch" && "Aplicando as alteracoes na atividade..."}
+              {streamingPhase === "clarification" && "Preparando uma pergunta para esclarecer seu pedido..."}
+            </span>
+          </div>
+        )}
         <pre className="max-h-72 overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
-          {streamingPreviewText || "Aguardando os primeiros tokens da IA..."}
+          {streamingPreviewText || "Conectando com a IA..."}
         </pre>
       </div>
     )
