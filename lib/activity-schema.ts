@@ -229,15 +229,19 @@ function normalizeProofType(value: unknown): MissionProofType {
     return "video"
   }
 
-  if (token.includes("foto") || token.includes("imagem")) {
+  if (token.includes("foto") || token.includes("imagem") || token.includes("image") || token.includes("photo")) {
     return "foto"
   }
 
-  if (token.includes("arquivo") || token.includes("pdf") || token.includes("document")) {
+  if (token.includes("arquivo") || token.includes("pdf") || token.includes("document") || token.includes("file")) {
     return "arquivo"
   }
 
-  return "texto"
+  if (token.includes("texto") || token.includes("text")) {
+    return "texto"
+  }
+
+  return "foto"
 }
 
 function normalizeValidation(value: unknown): MissionValidation {
