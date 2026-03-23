@@ -790,8 +790,10 @@ export default function HomePage() {
 
       setGenerationState("error")
       setGenerationError(normalizedError)
+      setStreamingPreviewText("")
       setStreamingPreviewAttempt(null)
       setStreamingPreviewModel(null)
+      setStreamingPhase(null)
       replaceAssistantMessage(
         pendingMessageId,
         `${normalizedError.title}. ${normalizedError.description}${
@@ -1054,7 +1056,8 @@ export default function HomePage() {
   }
 
   const renderStreamingPreviewCard = () => {
-    if (generationState !== "loading" && !streamingPreviewText) {
+    // Nao mostra o card se houver erro ou se nao estiver carregando
+    if (generationState === "error" || (generationState !== "loading" && !streamingPreviewText)) {
       return null
     }
 
