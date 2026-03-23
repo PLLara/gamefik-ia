@@ -8,6 +8,7 @@ import {
   Bug,
   Copy,
   CheckCircle2,
+  ChevronDown,
   Circle,
   ClipboardList,
   Eye,
@@ -20,6 +21,7 @@ import {
   Save,
   Send,
   Sparkles,
+  Target,
   Trash2,
   X,
 } from "lucide-react"
@@ -445,6 +447,8 @@ export default function HomePage() {
   const [streamingPreviewAttempt, setStreamingPreviewAttempt] = useState<number | null>(null)
   const [streamingPreviewModel, setStreamingPreviewModel] = useState<string | null>(null)
   const [streamingPhase, setStreamingPhase] = useState<string | null>(null)
+  const [detectedActivityType, setDetectedActivityType] = useState<"quiz" | "missao" | null>(null)
+  const [userOverrideType, setUserOverrideType] = useState<"quiz" | "missao" | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
@@ -486,6 +490,52 @@ export default function HomePage() {
     }
   }, [currentQuestion, currentQuiz])
 
+  // Detecta a intencao do usuario baseado no texto digitado
+  useEffect(() => {
+    if (!message.trim()) {
+      setDetectedActivityType(null)
+      return
+    }
+
+    const text = message.toLowerCase()
+    
+    // Palavras-chave para quiz
+    const quizKeywords = [
+      "quiz", "questao", "questoes", "questão", "questões",
+      "pergunta", "perguntas", "alternativa", "alternativas",
+      "multipla escolha", "múltipla escolha", "verdadeiro ou falso",
+      "prova", "teste", "avaliacao", "avaliação", "exercicio", "exercício"
+    ]
+    
+    // Palavras-chave para missao
+    const missionKeywords = [
+      "missao", "missão", "tarefa", "atividade pratica", "atividade prática",
+      "desafio", "projeto", "entregar", "enviar foto", "enviar video",
+      "fazer", "criar", "construir", "desenvolver", "produzir",
+      "pesquisa", "pesquisar", "investigar", "explorar"
+    ]
+    
+    const hasQuizKeyword = quizKeywords.some(keyword => text.includes(keyword))
+    const hasMissionKeyword = missionKeywords.some(keyword => text.includes(keyword))
+    
+    if (hasQuizKeyword && !hasMissionKeyword) {
+      setDetectedActivityType("quiz")
+    } else if (hasMissionKeyword && !hasQuizKeyword) {
+      setDetectedActivityType("missao")
+    } else if (hasQuizKeyword && hasMissionKeyword) {
+      // Ambos detectados - manter o anterior ou default para quiz
+      setDetectedActivityType(prev => prev || "quiz")
+    } else {
+      // Nenhum detectado - tentar inferir pelo contexto
+      // Se menciona "sobre" algo educacional, provavelmente quiz
+      if (text.includes("sobre") && text.length > 15) {
+        setDetectedActivityType("quiz")
+      } else {
+        setDetectedActivityType(null)
+      }
+    }
+  }, [message])
+
   const updateActivity = (updater: (activity: Activity) => Activity) => {
     setCurrentActivity((previousActivity) => {
       if (!previousActivity) {
@@ -514,6 +564,8 @@ export default function HomePage() {
     const prompt = message.trim()
     setMessage("")
     setAttachments([])
+    setDetectedActivityType(null)
+    setUserOverrideType(null)
     const userMessage: ChatMessage = {
       id: createEntityId("message"),
       role: "user",
@@ -1679,6 +1731,34 @@ export default function HomePage() {
                   </span>
                 </div>
 
+                <div className="flex items-center gap-3">
+                  {/* Indicador de tipo de atividade detectado */}
+                  {(detectedActivityType || userOverrideType) && message.trim() && (
+                    <div className="flex items-center animate-fade-in">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentType = userOverrideType || detectedActivityType
+                          setUserOverrideType(currentType === "quiz" ? "missao" : "quiz")
+                        }}
+                        className="group flex items-center gap-1.5 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-all duration-200 hover:border-primary/40 hover:bg-primary/5 hover:text-foreground"
+                      >
+                        {(userOverrideType || detectedActivityType) === "quiz" ? (
+                          <>
+                            <Gamepad2 className="h-3.5 w-3.5 text-primary/70" />
+                            <span>Quiz</span>
+                          </>
+                        ) : (
+                          <>
+                            <Target className="h-3.5 w-3.5 text-amber-500/70" />
+                            <span>Missao</span>
+                          </>
+                        )}
+                        <ChevronDown className="h-3 w-3 opacity-50 transition-transform duration-200 group-hover:rotate-180" />
+                      </button>
+                    </div>
+                  )}
+
                 <button
                   type="submit"
                   disabled={!canSubmit}
@@ -1707,6 +1787,7 @@ export default function HomePage() {
                     </span>
                   )}
                 </button>
+                </div>
               </div>
             </div>
           </div>
