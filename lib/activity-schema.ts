@@ -11,6 +11,23 @@ export const activityStatusSchema = z.enum(["draft", "published"])
 export const missionProofTypeSchema = z.enum(["foto", "video", "texto", "arquivo"])
 export const missionValidationSchema = z.enum(["ia", "manual", "auto"])
 
+// Schema flexivel que aceita valores em ingles e normaliza para portugues
+const flexibleProofTypeSchema = z.string().transform((val): "foto" | "video" | "texto" | "arquivo" => {
+  const token = val.toLowerCase().trim()
+  if (token.includes("video")) return "video"
+  if (token.includes("foto") || token.includes("imagem") || token.includes("image") || token.includes("photo")) return "foto"
+  if (token.includes("arquivo") || token.includes("pdf") || token.includes("document") || token.includes("file")) return "arquivo"
+  if (token.includes("texto") || token.includes("text")) return "texto"
+  return "foto"
+})
+
+const flexibleValidationSchema = z.string().transform((val): "ia" | "manual" | "auto" => {
+  const token = val.toLowerCase().trim()
+  if (token.includes("manual") || token.includes("professor") || token.includes("teacher")) return "manual"
+  if (token.includes("auto") || token.includes("self")) return "auto"
+  return "ia"
+})
+
 const textField = (label: string, maxLength: number) =>
   z
     .string()
@@ -51,19 +68,24 @@ export const quizActivityGenerationSchema = z.object({
 })
 
 export const missionActivityGenerationSchema = z.object({
-  type: z.literal("missao"),
+  type: z.literal("missao").or(z.literal("mission")).transform(() => "missao" as const),
   title: textField("Titulo", 120),
   description: textField("Descricao", 800),
   teacherMessage: textField("Mensagem do professor", 400),
   attachmentContext: z.array(textField("Contexto do anexo", 120)).max(10).default([]),
-  missionProofType: missionProofTypeSchema,
-  missionValidation: missionValidationSchema,
+  missionProofType: flexibleProofTypeSchema,
+  missionValidation: flexibleValidationSchema,
 })
 
-export const activityGenerationSchema = z.discriminatedUnion("type", [
+// Schema que aceita type em ingles ou portugues e valida de acordo
+export const activityGenerationSchema = z.union([
   quizActivityGenerationSchema,
   missionActivityGenerationSchema,
-])
+]).transform((data) => {
+  // Garante que o type esta normalizado
+  if (data.type === "quiz") return data
+  return { ...data, type: "missao" as const }
+})
 
 export const quizAlternativeSchema = z.object({
   id: textField("ID da alternativa", 80),
