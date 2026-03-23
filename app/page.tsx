@@ -178,13 +178,9 @@ function buildUserMessage(prompt: string, attachments: UploadedAttachment[]) {
   return `Gerar atividade usando ${attachments.length} anexos enviados.`
 }
 
-function isLocalDebugHost(hostname: string) {
-  return (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "::1" ||
-    hostname.endsWith(".localhost")
-  )
+function isLocalDebugHost(_hostname: string) {
+  // Debug habilitado em todos os ambientes para facilitar depuracao
+  return true
 }
 
 function formatDebugJson(value: unknown) {
@@ -1038,10 +1034,10 @@ export default function HomePage() {
           className="fixed bottom-6 right-6 z-[60] flex items-center gap-2 rounded-full border border-primary/30 bg-card/95 px-4 py-2 text-sm font-semibold text-foreground shadow-xl backdrop-blur-sm transition-colors hover:bg-card"
         >
           <Bug className="h-4 w-4 text-primary" />
-          Debug IA
-          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary">
-            localhost
-          </span>
+            Debug IA
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary">
+              ativo
+            </span>
           {latestTokenCount ? (
             <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
               {latestTokenCount} tokens
@@ -1067,7 +1063,7 @@ export default function HomePage() {
                     </h2>
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Visivel apenas em localhost. Aqui voce ve prompt, retries, resposta bruta, payload normalizado e telemetria.
+                    Painel de debug ativo. Aqui voce ve prompt, retries, resposta bruta, payload normalizado e telemetria.
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
