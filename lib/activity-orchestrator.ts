@@ -34,6 +34,7 @@ import {
 import {
   GEMINI_API_VERSION,
   GEMINI_FALLBACK_MODEL,
+  GEMINI_FAST_MODEL,
   GEMINI_MODEL,
   getGeminiClient,
 } from "@/lib/gemini"
@@ -130,6 +131,11 @@ const candidateModels = [GEMINI_MODEL, GEMINI_FALLBACK_MODEL].filter(
   (modelName, index, array) => array.indexOf(modelName) === index
 )
 
+// Modelos rapidos para router/planner/reviewer (sem thinking)
+const fastModels = [GEMINI_FAST_MODEL, GEMINI_FALLBACK_MODEL].filter(
+  (modelName, index, array) => array.indexOf(modelName) === index
+)
+
 function toPlainJson<T>(value: T) {
   if (value === undefined) {
     return null
@@ -212,6 +218,10 @@ async function callStructuredModel<T>({
           responseMimeType: "application/json",
           responseJsonSchema: jsonSchema,
           systemInstruction,
+          // Desativa thinking para respostas mais rapidas
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
         },
       })
 
@@ -279,6 +289,10 @@ async function callExecutorStream({
           responseMimeType: "application/json",
           responseJsonSchema: getActivityOperationJsonSchema(expectedAction),
           systemInstruction: executorSystemInstruction,
+          // Desativa thinking para streaming mais rapido
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
         },
       })
 
@@ -397,13 +411,13 @@ export async function orchestrateActivityOperation({
     type: "phase_update",
     data: {
       phase: "router",
-      model: GEMINI_MODEL,
+      model: GEMINI_FAST_MODEL,
       message: "Analisando a intencao do pedido...",
     },
   })
 
   const routerResult = await callStructuredModel({
-    models: candidateModels,
+    models: fastModels,
     promptText: buildRouterPrompt({
       userPrompt,
       currentActivity,
@@ -466,7 +480,7 @@ export async function orchestrateActivityOperation({
   }
 
   const plannerResult = await callStructuredModel({
-    models: candidateModels,
+    models: fastModels,
     promptText: buildPlannerPrompt({
       userPrompt,
       currentActivity,
@@ -560,13 +574,13 @@ export async function orchestrateActivityOperation({
       type: "phase_update",
       data: {
         phase: "reviewer",
-        model: GEMINI_MODEL,
+        model: GEMINI_FAST_MODEL,
         message: "Revisando se a operacao realmente cumpre o pedido...",
       },
     })
 
     const reviewerResult = await callStructuredModel({
-      models: candidateModels,
+      models: fastModels,
       promptText: buildReviewerPrompt({
         userPrompt,
         currentActivity,

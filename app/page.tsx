@@ -8,18 +8,23 @@ import {
   Bug,
   Copy,
   CheckCircle2,
+  ChevronDown,
   Circle,
   ClipboardList,
   Eye,
   FileText,
   Gamepad2,
+  GraduationCap,
+  Hash,
   ImageIcon,
   Paperclip,
   Pencil,
   Plus,
   Save,
   Send,
+  Settings2,
   Sparkles,
+  Target,
   Trash2,
   X,
 } from "lucide-react"
@@ -178,13 +183,9 @@ function buildUserMessage(prompt: string, attachments: UploadedAttachment[]) {
   return `Gerar atividade usando ${attachments.length} anexos enviados.`
 }
 
-function isLocalDebugHost(hostname: string) {
-  return (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "::1" ||
-    hostname.endsWith(".localhost")
-  )
+function isLocalDebugHost(_hostname: string) {
+  // Debug habilitado em todos os ambientes para facilitar depuracao
+  return true
 }
 
 function formatDebugJson(value: unknown) {
@@ -440,7 +441,7 @@ export default function HomePage() {
   const [currentActivity, setCurrentActivity] = useState<Activity | null>(null)
   const [currentQuestion, setCurrentQuestion] = useState(0)
   const [currentModel, setCurrentModel] = useState<string | null>(null)
-  const [isLocalDebugMode, setIsLocalDebugMode] = useState(false)
+  const [isLocalDebugMode, setIsLocalDebugMode] = useState(true)
   const [showDebugPanel, setShowDebugPanel] = useState(false)
   const [latestGenerationDebug, setLatestGenerationDebug] = useState<GenerationDebugPayload | null>(
     null
@@ -448,6 +449,14 @@ export default function HomePage() {
   const [streamingPreviewText, setStreamingPreviewText] = useState("")
   const [streamingPreviewAttempt, setStreamingPreviewAttempt] = useState<number | null>(null)
   const [streamingPreviewModel, setStreamingPreviewModel] = useState<string | null>(null)
+  const [streamingPhase, setStreamingPhase] = useState<string | null>(null)
+  const [detectedActivityType, setDetectedActivityType] = useState<"quiz" | "missao" | null>(null)
+  const [userOverrideType, setUserOverrideType] = useState<"quiz" | "missao" | null>(null)
+  
+  // Parametros opcionais de geracao
+  const [selectedDifficulty, setSelectedDifficulty] = useState<string | null>(null)
+  const [selectedQuestionCount, setSelectedQuestionCount] = useState<number | null>(null)
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
@@ -489,6 +498,52 @@ export default function HomePage() {
     }
   }, [currentQuestion, currentQuiz])
 
+  // Detecta a intencao do usuario baseado no texto digitado
+  useEffect(() => {
+    if (!message.trim()) {
+      setDetectedActivityType(null)
+      return
+    }
+
+    const text = message.toLowerCase()
+    
+    // Palavras-chave para quiz
+    const quizKeywords = [
+      "quiz", "questao", "questoes", "questão", "questões",
+      "pergunta", "perguntas", "alternativa", "alternativas",
+      "multipla escolha", "múltipla escolha", "verdadeiro ou falso",
+      "prova", "teste", "avaliacao", "avaliação", "exercicio", "exercício"
+    ]
+    
+    // Palavras-chave para missao
+    const missionKeywords = [
+      "missao", "missão", "tarefa", "atividade pratica", "atividade prática",
+      "desafio", "projeto", "entregar", "enviar foto", "enviar video",
+      "fazer", "criar", "construir", "desenvolver", "produzir",
+      "pesquisa", "pesquisar", "investigar", "explorar"
+    ]
+    
+    const hasQuizKeyword = quizKeywords.some(keyword => text.includes(keyword))
+    const hasMissionKeyword = missionKeywords.some(keyword => text.includes(keyword))
+    
+    if (hasQuizKeyword && !hasMissionKeyword) {
+      setDetectedActivityType("quiz")
+    } else if (hasMissionKeyword && !hasQuizKeyword) {
+      setDetectedActivityType("missao")
+    } else if (hasQuizKeyword && hasMissionKeyword) {
+      // Ambos detectados - manter o anterior ou default para quiz
+      setDetectedActivityType(prev => prev || "quiz")
+    } else {
+      // Nenhum detectado - tentar inferir pelo contexto
+      // Se menciona "sobre" algo educacional, provavelmente quiz
+      if (text.includes("sobre") && text.length > 15) {
+        setDetectedActivityType("quiz")
+      } else {
+        setDetectedActivityType(null)
+      }
+    }
+  }, [message])
+
   const updateActivity = (updater: (activity: Activity) => Activity) => {
     setCurrentActivity((previousActivity) => {
       if (!previousActivity) {
@@ -514,7 +569,42 @@ export default function HomePage() {
       return
     }
 
-    const prompt = message.trim()
+    const basePrompt = message.trim()
+    
+    // Constroi o prompt com os parametros selecionados
+    const promptParts: string[] = [basePrompt]
+    
+    if (userOverrideType) {
+      promptParts.push(`[Tipo: ${userOverrideType === "quiz" ? "Quiz" : "Missao"}]`)
+    }
+    
+    if (selectedDifficulty) {
+      const difficultyLabels: Record<string, string> = {
+        crianca: "nivel crianca (4-6 anos)",
+        fundamental1: "nivel ensino fundamental I (7-10 anos)",
+        fundamental2: "nivel ensino fundamental II (11-14 anos)",
+        medio: "nivel ensino medio",
+        enem: "nivel ENEM",
+        faculdade: "nivel faculdade/graduacao",
+        pos: "nivel pos-graduacao",
+      }
+      promptParts.push(`[Dificuldade: ${difficultyLabels[selectedDifficulty] || selectedDifficulty}]`)
+    }
+    
+    if (selectedQuestionCount && (userOverrideType === "quiz" || detectedActivityType === "quiz" || !userOverrideType)) {
+      promptParts.push(`[Quantidade: ${selectedQuestionCount} questoes]`)
+    }
+    
+    const prompt = promptParts.join(" ")
+    
+    setMessage("")
+    setAttachments([])
+    setDetectedActivityType(null)
+    setUserOverrideType(null)
+    setSelectedDifficulty(null)
+    setSelectedQuestionCount(null)
+    setShowAdvancedOptions(false)
+    
     const userMessage: ChatMessage = {
       id: createEntityId("message"),
       role: "user",
@@ -531,12 +621,13 @@ export default function HomePage() {
         content: "Gerando atividade com a IA...",
       },
     ])
-    setGenerationState("loading")
-    setGenerationError(null)
-    setLatestGenerationDebug(null)
-    setStreamingPreviewText("")
-    setStreamingPreviewAttempt(null)
-    setStreamingPreviewModel(null)
+  setGenerationState("loading")
+  setGenerationError(null)
+  setLatestGenerationDebug(null)
+  setStreamingPreviewText("")
+  setStreamingPreviewAttempt(null)
+  setStreamingPreviewModel(null)
+  setStreamingPhase(null)
 
     try {
       const formData = new FormData()
@@ -572,6 +663,7 @@ export default function HomePage() {
       await readStreamingEvents(response, (streamEvent) => {
         switch (streamEvent.type) {
           case "phase_update":
+            setStreamingPhase(streamEvent.data.phase)
             setStreamingPreviewText((previousText) =>
               `${previousText}${
                 previousText.length > 0 ? "\n\n" : ""
@@ -650,11 +742,12 @@ export default function HomePage() {
         throw new Error("Nao foi possivel concluir a geracao em streaming.")
       }
 
-      if (resolvedPayload.operation?.action === "ask_clarification") {
-        setGenerationState("idle")
-        setStreamingPreviewText("")
-        setStreamingPreviewAttempt(null)
-        setStreamingPreviewModel(null)
+  if (resolvedPayload.operation?.action === "ask_clarification") {
+  setGenerationState("idle")
+  setStreamingPreviewText("")
+  setStreamingPreviewAttempt(null)
+  setStreamingPreviewModel(null)
+  setStreamingPhase(null)
         replaceAssistantMessage(
           pendingMessageId,
           resolvedPayload.assistantMessage ?? "Preciso de mais detalhes para continuar."
@@ -673,12 +766,13 @@ export default function HomePage() {
       setCurrentActivity(generatedActivity)
       setCurrentQuestion(0)
       setQuizTab(generatedActivity.type === "quiz" ? "questoes" : "informacoes")
-      setViewMode("creating")
-      setRightPanel("editor")
-      setGenerationState("idle")
-      setStreamingPreviewText("")
-      setStreamingPreviewAttempt(null)
-      setStreamingPreviewModel(null)
+  setViewMode("creating")
+  setRightPanel("editor")
+  setGenerationState("idle")
+  setStreamingPreviewText("")
+  setStreamingPreviewAttempt(null)
+  setStreamingPreviewModel(null)
+  setStreamingPhase(null)
       replaceAssistantMessage(
         pendingMessageId,
         resolvedPayload.assistantMessage ?? generatedActivity.teacherMessage
@@ -696,8 +790,10 @@ export default function HomePage() {
 
       setGenerationState("error")
       setGenerationError(normalizedError)
+      setStreamingPreviewText("")
       setStreamingPreviewAttempt(null)
       setStreamingPreviewModel(null)
+      setStreamingPhase(null)
       replaceAssistantMessage(
         pendingMessageId,
         `${normalizedError.title}. ${normalizedError.description}${
@@ -940,18 +1036,50 @@ export default function HomePage() {
     }
   }
 
+  const getPhaseLabel = (phase: string | null) => {
+    switch (phase) {
+      case "router":
+        return "Analisando intencao..."
+      case "planner":
+        return "Planejando operacao..."
+      case "executor":
+        return "Gerando conteudo..."
+      case "reviewer":
+        return "Revisando qualidade..."
+      case "patch":
+        return "Aplicando alteracoes..."
+      case "clarification":
+        return "Preparando pergunta..."
+      default:
+        return "Iniciando..."
+    }
+  }
+
   const renderStreamingPreviewCard = () => {
-    if (generationState !== "loading" && !streamingPreviewText) {
+    // Nao mostra o card se houver erro ou se nao estiver carregando
+    if (generationState === "error" || (generationState !== "loading" && !streamingPreviewText)) {
       return null
     }
 
+    const isGeneratingContent = streamingPhase === "executor" && streamingPreviewText.includes("----")
+
     return (
-      <div className="rounded-2xl border border-primary/20 bg-card/95 p-4 shadow-card backdrop-blur-sm">
+      <div className="animate-fade-in-up rounded-2xl border border-primary/20 bg-card/95 p-4 shadow-card backdrop-blur-sm">
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-            <Sparkles className="h-3.5 w-3.5" />
+            <Sparkles className="h-3.5 w-3.5 animate-spin-smooth" />
             Preview ao vivo
           </span>
+          <span className="flex items-center gap-1">
+            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-dots-1" />
+            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-dots-2" />
+            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-dots-3" />
+          </span>
+          {streamingPhase && (
+            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-700 animate-pulse">
+              {getPhaseLabel(streamingPhase)}
+            </span>
+          )}
           {streamingPreviewAttempt ? (
             <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
               Tentativa {streamingPreviewAttempt}
@@ -963,8 +1091,24 @@ export default function HomePage() {
             </span>
           ) : null}
         </div>
+        {!isGeneratingContent && streamingPhase && streamingPhase !== "executor" && (
+          <div className="mb-3 flex items-center gap-3 rounded-lg bg-muted/50 px-3 py-2">
+            <div className="flex gap-1">
+              <div className="h-2 w-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+              <div className="h-2 w-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+              <div className="h-2 w-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {streamingPhase === "router" && "A IA esta analisando seu pedido para entender a melhor forma de atende-lo..."}
+              {streamingPhase === "planner" && "Definindo a estrategia para criar ou modificar sua atividade..."}
+              {streamingPhase === "reviewer" && "Verificando se o conteudo gerado atende ao seu pedido..."}
+              {streamingPhase === "patch" && "Aplicando as alteracoes na atividade..."}
+              {streamingPhase === "clarification" && "Preparando uma pergunta para esclarecer seu pedido..."}
+            </span>
+          </div>
+        )}
         <pre className="max-h-72 overflow-auto rounded-xl bg-muted px-3 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
-          {streamingPreviewText || "Aguardando os primeiros tokens da IA..."}
+          {streamingPreviewText || "Conectando com a IA..."}
         </pre>
       </div>
     )
@@ -976,29 +1120,30 @@ export default function HomePage() {
     }
 
     return (
-      <div className="rounded-2xl border border-primary/20 bg-card/95 p-4 shadow-card backdrop-blur-sm">
+      <div className="animate-fade-in-up rounded-2xl border border-primary/20 bg-card/95 p-4 shadow-card backdrop-blur-sm">
         <div className="mb-3 flex items-center gap-2">
           <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-            <Sparkles className="h-3.5 w-3.5" />
+            <Sparkles className="h-3.5 w-3.5 animate-pulse" />
             Preciso de mais contexto
           </span>
         </div>
         <div className="space-y-3">
-          {initialConversationMessages.map((entry) => (
+          {initialConversationMessages.map((entry, index) => (
             <div
               key={entry.id}
               className={cn(
-                "rounded-2xl px-4 py-3 text-sm leading-relaxed",
+                "rounded-2xl px-4 py-3 text-sm leading-relaxed animate-fade-in-up opacity-0",
                 entry.role === "ai"
                   ? "bg-muted text-foreground"
                   : "bg-primary text-primary-foreground"
               )}
+              style={{ animationDelay: `${index * 0.1}s` }}
             >
               {entry.content}
             </div>
           ))}
         </div>
-        <p className="mt-3 text-xs font-medium text-muted-foreground">
+        <p className="mt-3 text-xs font-medium text-muted-foreground animate-fade-in" style={{ animationDelay: "0.3s" }}>
           Responda no campo acima e eu continuo exatamente daqui.
         </p>
       </div>
@@ -1030,10 +1175,10 @@ export default function HomePage() {
           className="fixed bottom-6 right-6 z-[60] flex items-center gap-2 rounded-full border border-primary/30 bg-card/95 px-4 py-2 text-sm font-semibold text-foreground shadow-xl backdrop-blur-sm transition-colors hover:bg-card"
         >
           <Bug className="h-4 w-4 text-primary" />
-          Debug IA
-          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary">
-            localhost
-          </span>
+            Debug IA
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary">
+              ativo
+            </span>
           {latestTokenCount ? (
             <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
               {latestTokenCount} tokens
@@ -1059,7 +1204,7 @@ export default function HomePage() {
                     </h2>
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Visivel apenas em localhost. Aqui voce ve prompt, retries, resposta bruta, payload normalizado e telemetria.
+                    Painel de debug ativo. Aqui voce ve prompt, retries, resposta bruta, payload normalizado e telemetria.
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1550,10 +1695,11 @@ export default function HomePage() {
             <div className="rounded-[14px] bg-card/95 shadow-inner backdrop-blur-md">
               {attachments.length > 0 && (
                 <div className="flex flex-wrap gap-2 border-b border-border/80 px-4 py-3">
-                  {attachments.map((attachment) => (
+                  {attachments.map((attachment, index) => (
                     <div
                       key={attachment.id}
-                      className="flex items-center gap-2 rounded-lg border border-border bg-muted/60 px-3 py-1.5"
+                      className="flex items-center gap-2 rounded-lg border border-border bg-muted/60 px-3 py-1.5 animate-pop-in opacity-0"
+                      style={{ animationDelay: `${index * 0.05}s` }}
                     >
                       {attachment.type === "pdf" ? (
                         <FileText className="h-4 w-4 text-destructive" />
@@ -1569,7 +1715,7 @@ export default function HomePage() {
                       <button
                         type="button"
                         onClick={() => removeAttachment(attachment.id)}
-                        className="ml-1 flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                        className="ml-1 flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground transition-all duration-200 hover:bg-sidebar-accent hover:text-foreground hover:scale-125 active:scale-90"
                       >
                         <X className="h-3 w-3" />
                       </button>
@@ -1583,11 +1729,96 @@ export default function HomePage() {
                 onChange={(event) => setMessage(event.target.value)}
                 placeholder="Ex: Quiz sobre fotossintese para o 7o ano com 5 questoes de multipla escolha..."
                 rows={4}
-                className="w-full resize-none rounded-t-[14px] bg-transparent px-5 py-4 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
+                className="w-full resize-none rounded-t-[14px] bg-transparent px-5 py-4 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground transition-all duration-200 focus:bg-muted/30"
               />
 
+              {/* Parametros opcionais */}
+              <div className="border-t border-border/50 px-4 py-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                  <span>Opcoes</span>
+                  <ChevronDown className={cn("h-3 w-3 transition-transform duration-200", showAdvancedOptions && "rotate-180")} />
+                </button>
+                
+                {showAdvancedOptions && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 animate-fade-in">
+                    {/* Tipo de atividade */}
+                    <div className="relative">
+                      <select
+                        value={userOverrideType || ""}
+                        onChange={(e) => setUserOverrideType(e.target.value as "quiz" | "missao" | null || null)}
+                        className="appearance-none rounded-lg border border-border/60 bg-card/80 pl-3 pr-7 py-1.5 text-xs font-medium text-foreground outline-none transition-all duration-200 hover:border-primary/40 focus:border-primary/60 focus:ring-1 focus:ring-primary/20"
+                      >
+                        <option value="">Tipo: Auto</option>
+                        <option value="quiz">Quiz</option>
+                        <option value="missao">Missao</option>
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                    </div>
+
+                    {/* Dificuldade */}
+                    <div className="relative">
+                      <select
+                        value={selectedDifficulty || ""}
+                        onChange={(e) => setSelectedDifficulty(e.target.value || null)}
+                        className="appearance-none rounded-lg border border-border/60 bg-card/80 pl-3 pr-7 py-1.5 text-xs font-medium text-foreground outline-none transition-all duration-200 hover:border-primary/40 focus:border-primary/60 focus:ring-1 focus:ring-primary/20"
+                      >
+                        <option value="">Dificuldade: Auto</option>
+                        <option value="crianca">Crianca (4-6 anos)</option>
+                        <option value="fundamental1">Fundamental I (7-10 anos)</option>
+                        <option value="fundamental2">Fundamental II (11-14 anos)</option>
+                        <option value="medio">Ensino Medio</option>
+                        <option value="enem">Nivel ENEM</option>
+                        <option value="faculdade">Nivel Faculdade</option>
+                        <option value="pos">Pos-graduacao</option>
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                    </div>
+
+                    {/* Quantidade de questoes (apenas para quiz) */}
+                    {(userOverrideType === "quiz" || detectedActivityType === "quiz" || (!userOverrideType && !detectedActivityType)) && (
+                      <div className="relative animate-fade-in">
+                        <select
+                          value={selectedQuestionCount || ""}
+                          onChange={(e) => setSelectedQuestionCount(e.target.value ? Number(e.target.value) : null)}
+                          className="appearance-none rounded-lg border border-border/60 bg-card/80 pl-3 pr-7 py-1.5 text-xs font-medium text-foreground outline-none transition-all duration-200 hover:border-primary/40 focus:border-primary/60 focus:ring-1 focus:ring-primary/20"
+                        >
+                          <option value="">Questoes: Auto</option>
+                          <option value="3">3 questoes</option>
+                          <option value="5">5 questoes</option>
+                          <option value="10">10 questoes</option>
+                          <option value="15">15 questoes</option>
+                          <option value="20">20 questoes</option>
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                      </div>
+                    )}
+
+                    {/* Indicador de parametros selecionados */}
+                    {(selectedDifficulty || selectedQuestionCount || userOverrideType) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDifficulty(null)
+                          setSelectedQuestionCount(null)
+                          setUserOverrideType(null)
+                        }}
+                        className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                        Limpar
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {generationError && (
-                <div className="mx-4 rounded-2xl border border-destructive/20 bg-destructive/5 px-4 py-4">
+                <div className="mx-4 rounded-2xl border border-destructive/20 bg-destructive/5 px-4 py-4 animate-fade-in-up">
                   <div className="mb-1 text-sm font-semibold text-destructive">
                     {generationError.title}
                   </div>
@@ -1607,9 +1838,9 @@ export default function HomePage() {
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center gap-1.5 rounded-xl px-2.5 py-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                    className="flex items-center gap-1.5 rounded-xl px-2.5 py-2 text-muted-foreground transition-all duration-200 hover:bg-sidebar-accent hover:text-foreground hover:scale-105 active:scale-95"
                   >
-                    <Paperclip className="h-4 w-4" aria-hidden />
+                    <Paperclip className="h-4 w-4 transition-transform duration-200 group-hover:rotate-12" aria-hidden />
                     <span className="text-xs font-semibold">Anexar PDF ou imagem</span>
                   </button>
                   <input
@@ -1627,6 +1858,7 @@ export default function HomePage() {
                   </span>
                 </div>
 
+                <div className="flex items-center gap-3">
                 <button
                   type="submit"
                   disabled={!canSubmit}
@@ -1645,9 +1877,17 @@ export default function HomePage() {
                       : undefined
                   }
                 >
-                  <Sparkles className="relative h-4 w-4" />
+                  <Sparkles className={cn("relative h-4 w-4", generationState === "loading" && "animate-spin-smooth")} />
                   <span>{generationState === "loading" ? "Gerando..." : "Criar com IA"}</span>
+                  {generationState === "loading" && (
+                    <span className="ml-1 flex items-center gap-0.5">
+                      <span className="h-1 w-1 rounded-full bg-white/80 animate-dots-1" />
+                      <span className="h-1 w-1 rounded-full bg-white/80 animate-dots-2" />
+                      <span className="h-1 w-1 rounded-full bg-white/80 animate-dots-3" />
+                    </span>
+                  )}
                 </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1706,8 +1946,8 @@ export default function HomePage() {
         </div>
 
         {quizTab === "informacoes" ? (
-          <div className="flex-1 overflow-auto px-6 py-6">
-            <div className="mb-6">
+          <div key="informacoes" className="flex-1 overflow-auto px-6 py-6 animate-fade-in">
+            <div className="mb-6 animate-fade-in-up opacity-0" style={{ animationDelay: "0.05s" }}>
               <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Titulo
               </label>
@@ -1715,11 +1955,11 @@ export default function HomePage() {
                 type="text"
                 value={currentQuiz.title}
                 onChange={(event) => updateQuizTextField("title", event.target.value)}
-                className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm font-medium text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+                className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm font-medium text-foreground outline-none transition-all duration-200 focus:border-ring focus:ring-2 focus:ring-ring/30 focus:scale-[1.01]"
               />
             </div>
 
-            <div className="mb-6">
+            <div className="mb-6 animate-fade-in-up opacity-0" style={{ animationDelay: "0.1s" }}>
               <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Descricao
               </label>
@@ -1727,11 +1967,11 @@ export default function HomePage() {
                 value={currentQuiz.description}
                 onChange={(event) => updateQuizTextField("description", event.target.value)}
                 rows={4}
-                className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+                className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-ring focus:ring-2 focus:ring-ring/30 focus:scale-[1.01]"
               />
             </div>
 
-            <div className="mb-6">
+            <div className="mb-6 animate-fade-in-up opacity-0" style={{ animationDelay: "0.15s" }}>
               <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Mensagem do professor
               </label>
@@ -1739,20 +1979,21 @@ export default function HomePage() {
                 value={currentQuiz.teacherMessage}
                 onChange={(event) => updateQuizTextField("teacherMessage", event.target.value)}
                 rows={3}
-                className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+                className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-ring focus:ring-2 focus:ring-ring/30 focus:scale-[1.01]"
               />
             </div>
 
-            <div>
+            <div className="animate-fade-in-up opacity-0" style={{ animationDelay: "0.2s" }}>
               <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Contexto dos anexos
               </label>
               <div className="flex flex-wrap gap-2 rounded-lg border border-border bg-card px-4 py-4">
                 {currentQuiz.attachmentContext.length > 0 ? (
-                  currentQuiz.attachmentContext.map((contextItem) => (
+                  currentQuiz.attachmentContext.map((contextItem, index) => (
                     <span
                       key={contextItem}
-                      className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+                      className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary animate-scale-in opacity-0"
+                      style={{ animationDelay: `${index * 0.05}s` }}
                     >
                       {contextItem}
                     </span>
@@ -1766,7 +2007,7 @@ export default function HomePage() {
             </div>
           </div>
         ) : (
-          <div className="flex-1 overflow-auto">
+          <div key="questoes" className="flex-1 overflow-auto animate-fade-in">
             <div className="flex items-center gap-2 border-b border-border px-6 py-3">
               <div className="flex items-center gap-1.5">
                 {currentQuiz.quizQuestions.map((_, index) => (
@@ -1775,11 +2016,12 @@ export default function HomePage() {
                     type="button"
                     onClick={() => setCurrentQuestion(index)}
                     className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-medium transition-colors",
+                      "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-medium transition-all duration-300 animate-scale-in opacity-0",
                       index === currentQuestion
-                        ? "bg-primary text-primary-foreground"
-                        : "border border-border bg-card text-foreground hover:bg-sidebar-accent"
+                        ? "bg-primary text-primary-foreground scale-105"
+                        : "border border-border bg-card text-foreground hover:bg-sidebar-accent hover:scale-105"
                     )}
+                    style={{ animationDelay: `${index * 0.05}s` }}
                   >
                     Q{index + 1}
                   </button>
@@ -1788,14 +2030,14 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={addQuestion}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-all duration-300 hover:bg-sidebar-accent hover:text-foreground hover:scale-110 active:scale-95"
                 title="Adicionar questao"
               >
                 <Plus className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="px-6 py-4">
+            <div key={currentQuestion} className="px-6 py-4 animate-slide-in-right">
               <div className="mb-6 flex items-center justify-between gap-4">
                 <p className="text-sm font-semibold text-primary">
                   Questao {currentQuestion + 1}{" "}
@@ -1808,7 +2050,7 @@ export default function HomePage() {
                     type="button"
                     onClick={() => setCurrentQuestion(Math.max(0, currentQuestion - 1))}
                     disabled={currentQuestion === 0}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent disabled:opacity-40"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-all duration-200 hover:bg-sidebar-accent hover:scale-110 active:scale-95 disabled:opacity-40 disabled:hover:scale-100"
                   >
                     <ArrowLeft className="h-4 w-4" />
                   </button>
@@ -1820,14 +2062,14 @@ export default function HomePage() {
                       )
                     }
                     disabled={currentQuestion === currentQuiz.quizQuestions.length - 1}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent disabled:opacity-40"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-all duration-200 hover:bg-sidebar-accent hover:scale-110 active:scale-95 disabled:opacity-40 disabled:hover:scale-100"
                   >
                     <ArrowRight className="h-4 w-4" />
                   </button>
                   <button
                     type="button"
                     onClick={() => removeQuestion(currentQuestion)}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-destructive transition-colors hover:bg-destructive/10"
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-destructive transition-all duration-200 hover:bg-destructive/10 hover:scale-110 active:scale-95"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -1862,21 +2104,23 @@ export default function HomePage() {
                     <div
                       key={alternative.id}
                       className={cn(
-                        "flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors",
+                        "flex items-center gap-3 rounded-lg border px-4 py-3 transition-all duration-300",
+                        "animate-fade-in-up opacity-0",
                         alternative.correct
                           ? "border-emerald-300 bg-emerald-50"
                           : "border-border bg-card"
                       )}
+                      style={{ animationDelay: `${alternativeIndex * 0.05}s` }}
                     >
                       <button
                         type="button"
                         onClick={() => toggleCorrectAnswer(currentQuestion, alternativeIndex)}
-                        className="shrink-0"
+                        className="shrink-0 transition-transform duration-200 hover:scale-110 active:scale-90"
                       >
                         {alternative.correct ? (
-                          <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                          <CheckCircle2 className="h-5 w-5 text-emerald-600 animate-pop-in" />
                         ) : (
-                          <Circle className="h-5 w-5 text-muted-foreground transition-colors hover:text-foreground" />
+                          <Circle className="h-5 w-5 text-muted-foreground transition-all duration-200 hover:text-foreground hover:scale-110" />
                         )}
                       </button>
                       <span
@@ -1902,7 +2146,7 @@ export default function HomePage() {
                       <button
                         type="button"
                         onClick={() => removeAlternative(currentQuestion, alternativeIndex)}
-                        className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
+                        className="shrink-0 text-muted-foreground transition-all duration-200 hover:text-destructive hover:scale-125 active:scale-90"
                         title="Remover alternativa"
                       >
                         <X className="h-4 w-4" />
@@ -1914,9 +2158,9 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => addAlternative(currentQuestion)}
-                  className="mt-3 flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  className="mt-3 flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-all duration-200 hover:text-foreground hover:translate-x-1 active:scale-95"
                 >
-                  <Plus className="h-4 w-4" />
+                  <Plus className="h-4 w-4 transition-transform duration-200 group-hover:rotate-90" />
                   Adicionar alternativa
                 </button>
               </div>
@@ -1933,7 +2177,7 @@ export default function HomePage() {
     }
 
     return (
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden animate-fade-in">
         <div className="flex items-center gap-6 border-b border-border px-6 pt-1">
           <button type="button" className="border-b-2 border-primary pb-3 pt-2 text-sm font-medium text-primary">
             Detalhes
@@ -1941,7 +2185,7 @@ export default function HomePage() {
         </div>
 
         <div className="flex-1 overflow-auto px-6 py-6">
-          <div className="mb-6">
+          <div className="mb-6 animate-fade-in-up opacity-0" style={{ animationDelay: "0.05s" }}>
             <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Titulo
             </label>
@@ -1949,11 +2193,11 @@ export default function HomePage() {
               type="text"
               value={currentMission.title}
               onChange={(event) => updateMissionField("title", event.target.value)}
-              className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm font-medium text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+              className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm font-medium text-foreground outline-none transition-all duration-200 focus:border-ring focus:ring-2 focus:ring-ring/30 focus:scale-[1.01]"
             />
           </div>
 
-          <div className="mb-6">
+          <div className="mb-6 animate-fade-in-up opacity-0" style={{ animationDelay: "0.1s" }}>
             <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Descricao
             </label>
@@ -1961,11 +2205,11 @@ export default function HomePage() {
               value={currentMission.description}
               onChange={(event) => updateMissionField("description", event.target.value)}
               rows={8}
-              className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+              className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-ring focus:ring-2 focus:ring-ring/30 focus:scale-[1.01]"
             />
           </div>
 
-          <div className="mb-6">
+          <div className="mb-6 animate-fade-in-up opacity-0" style={{ animationDelay: "0.15s" }}>
             <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Mensagem do professor
             </label>
@@ -1973,20 +2217,21 @@ export default function HomePage() {
               value={currentMission.teacherMessage}
               onChange={(event) => updateMissionField("teacherMessage", event.target.value)}
               rows={4}
-              className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+              className="w-full rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground outline-none transition-all duration-200 focus:border-ring focus:ring-2 focus:ring-ring/30 focus:scale-[1.01]"
             />
           </div>
 
-          <div className="mb-6">
+          <div className="mb-6 animate-fade-in-up opacity-0" style={{ animationDelay: "0.2s" }}>
             <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Contexto dos anexos
             </label>
             <div className="flex flex-wrap gap-2 rounded-lg border border-border bg-card px-4 py-4">
               {currentMission.attachmentContext.length > 0 ? (
-                currentMission.attachmentContext.map((contextItem) => (
+                currentMission.attachmentContext.map((contextItem, index) => (
                   <span
                     key={contextItem}
-                    className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+                    className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary animate-scale-in opacity-0"
+                    style={{ animationDelay: `${0.25 + index * 0.05}s` }}
                   >
                     {contextItem}
                   </span>
@@ -2057,8 +2302,8 @@ export default function HomePage() {
     if (!currentActivity) {
       return (
         <div className="flex flex-1 items-center justify-center p-6">
-          <div className="max-w-sm rounded-2xl border border-dashed border-border bg-card px-6 py-8 text-center">
-            <Sparkles className="mx-auto mb-3 h-8 w-8 text-primary" />
+          <div className="max-w-sm rounded-2xl border border-dashed border-border bg-card px-6 py-8 text-center animate-fade-in-up">
+            <Sparkles className="mx-auto mb-3 h-8 w-8 text-primary animate-pulse" />
             <h3 className="mb-2 text-lg font-semibold text-foreground">
               Gere uma atividade para visualizar
             </h3>
@@ -2075,12 +2320,12 @@ export default function HomePage() {
 
     return (
       <div className="flex flex-1 flex-col items-center justify-center overflow-hidden p-6">
-        <p className="mb-6 text-center text-sm text-muted-foreground">
+        <p className="mb-6 text-center text-sm text-muted-foreground animate-fade-in">
           Visualizacao no app — como o aluno vera
         </p>
         <div className="flex h-full max-h-[720px] w-full items-center justify-center">
-          <div className="w-full max-w-[340px]">
-            <div className="flex h-[640px] flex-col overflow-hidden rounded-[3rem] border-[12px] border-gray-900 bg-gray-900 shadow-2xl">
+          <div className="w-full max-w-[340px] animate-scale-in">
+            <div className="flex h-[640px] flex-col overflow-hidden rounded-[3rem] border-[12px] border-gray-900 bg-gray-900 shadow-2xl transition-transform duration-300 hover:scale-[1.02]">
               <div className="flex items-center justify-between bg-primary px-4 py-2">
                 <span className="text-xs font-medium text-white">9:41</span>
                 <div className="flex items-center gap-1">
@@ -2143,10 +2388,11 @@ export default function HomePage() {
 
                   {currentActivity.attachmentContext.length > 0 && (
                     <div className="mb-4 flex flex-wrap gap-2">
-                      {currentActivity.attachmentContext.map((contextItem) => (
+                      {currentActivity.attachmentContext.map((contextItem, index) => (
                         <span
                           key={contextItem}
-                          className="rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-medium text-violet-700"
+                          className="rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-medium text-violet-700 animate-scale-in opacity-0"
+                          style={{ animationDelay: `${index * 0.05}s` }}
                         >
                           {contextItem}
                         </span>
@@ -2155,16 +2401,17 @@ export default function HomePage() {
                   )}
 
                   {currentActivity.type === "quiz" && previewQuestion ? (
-                    <div className="mb-5 rounded-xl bg-slate-50 p-3">
+                    <div className="mb-5 rounded-xl bg-slate-50 p-3 animate-fade-in-up">
                       <p className="mb-2 text-xs font-semibold text-slate-900">
                         Questao 1
                       </p>
                       <p className="mb-3 text-sm text-slate-700">{previewQuestion.enunciado}</p>
                       <div className="space-y-2">
-                        {previewQuestion.alternatives.map((alternative) => (
+                        {previewQuestion.alternatives.map((alternative, index) => (
                           <div
                             key={alternative.id}
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 animate-fade-in-up opacity-0 transition-all duration-200 hover:border-primary/30 hover:bg-slate-50"
+                            style={{ animationDelay: `${index * 0.08}s` }}
                           >
                             <span className="mr-2 font-semibold">{alternative.label}.</span>
                             {alternative.text}
@@ -2187,7 +2434,7 @@ export default function HomePage() {
                     </div>
                   )}
 
-                  <button className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 text-base font-semibold text-white">
+                  <button className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 text-base font-semibold text-white transition-all duration-200 hover:scale-[1.02] hover:shadow-lg active:scale-[0.98] animate-fade-in-up" style={{ animationDelay: "0.3s" }}>
                     {currentActivity.type === "quiz" ? "Jogar este Quiz" : "Iniciar Missao"}
                   </button>
                 </div>
@@ -2219,10 +2466,11 @@ export default function HomePage() {
           <div className="flex w-[390px] flex-col border-r border-border bg-card">
             <div className="flex-1 overflow-auto p-4">
               <div className="flex flex-col gap-4">
-                {messages.map((entry) => (
+                {messages.map((entry, index) => (
                   <div
                     key={entry.id}
-                    className={cn("flex gap-3", entry.role === "user" && "justify-end")}
+                    className={cn("flex gap-3 animate-fade-in-up opacity-0", entry.role === "user" && "justify-end")}
+                    style={{ animationDelay: `${index * 0.1}s` }}
                   >
                     {entry.role === "ai" && (
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
@@ -2231,7 +2479,7 @@ export default function HomePage() {
                     )}
                     <div
                       className={cn(
-                        "max-w-[85%] rounded-2xl px-4 py-3 text-sm",
+                        "max-w-[85%] rounded-2xl px-4 py-3 text-sm transition-all duration-200 hover:scale-[1.02]",
                         entry.role === "ai"
                           ? "bg-muted text-foreground"
                           : "bg-primary text-primary-foreground"
@@ -2340,7 +2588,7 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={handleBack}
-                className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+                className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground transition-all duration-200 hover:bg-sidebar-accent hover:text-foreground hover:-translate-x-0.5 active:scale-95"
               >
                 <ArrowLeft className="h-3.5 w-3.5" />
                 Voltar
@@ -2349,10 +2597,10 @@ export default function HomePage() {
                   type="button"
                   onClick={() => setRightPanel("editor")}
                   className={cn(
-                    "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                    "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all duration-200 active:scale-95",
                     rightPanel === "editor"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+                      ? "bg-primary text-primary-foreground scale-105"
+                      : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground hover:scale-105"
                   )}
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -2362,10 +2610,10 @@ export default function HomePage() {
                   type="button"
                   onClick={() => setRightPanel("preview")}
                   className={cn(
-                    "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                    "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all duration-200 active:scale-95",
                     rightPanel === "preview"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+                      ? "bg-primary text-primary-foreground scale-105"
+                      : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground hover:scale-105"
                   )}
                 >
                   <Eye className="h-3.5 w-3.5" />
@@ -2374,23 +2622,14 @@ export default function HomePage() {
               </div>
             </div>
 
-            {rightPanel === "editor"
-              ? currentActivity?.type === "quiz"
-                ? renderQuizEditor()
-                : renderMissionEditor()
-              : renderPreview()}
+            <div key={rightPanel} className="animate-fade-in">
+              {rightPanel === "editor"
+                ? currentActivity?.type === "quiz"
+                  ? renderQuizEditor()
+                  : renderMissionEditor()
+                : renderPreview()}
+            </div>
           </div>
-        </div>
-        <div className="flex items-center justify-between border-t border-border bg-card px-4 py-3">
-          <button
-            type="button"
-            onClick={saveCurrentActivity}
-            disabled={!currentActivity}
-            className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-accent disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Save className="h-4 w-4" />
-            Salvar rascunho
-          </button>
         </div>
       </div>
       {renderDebugControls()}

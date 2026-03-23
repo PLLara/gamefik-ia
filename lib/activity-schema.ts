@@ -11,12 +11,168 @@ export const activityStatusSchema = z.enum(["draft", "published"])
 export const missionProofTypeSchema = z.enum(["foto", "video", "texto", "arquivo"])
 export const missionValidationSchema = z.enum(["ia", "manual", "auto"])
 
+// Schema flexivel que aceita valores em ingles e normaliza para portugues
+const flexibleProofTypeSchema = z.string().transform((val): "foto" | "video" | "texto" | "arquivo" => {
+  const token = val.toLowerCase().trim()
+  if (token.includes("video")) return "video"
+  if (token.includes("foto") || token.includes("imagem") || token.includes("image") || token.includes("photo")) return "foto"
+  if (token.includes("arquivo") || token.includes("pdf") || token.includes("document") || token.includes("file")) return "arquivo"
+  if (token.includes("texto") || token.includes("text")) return "texto"
+  return "foto"
+})
+
+const flexibleValidationSchema = z.string().transform((val): "ia" | "manual" | "auto" => {
+  const token = val.toLowerCase().trim()
+  if (token.includes("manual") || token.includes("professor") || token.includes("teacher")) return "manual"
+  if (token.includes("auto") || token.includes("self")) return "auto"
+  return "ia"
+})
+
+// Corrige caracteres acentuados que foram corrompidos pelo modelo Gemini
+// O modelo as vezes retorna acentos como \n (newline)
+function fixCorruptedAccents(text: string): string {
+  if (!text) return text
+  
+  // Mapa de padroes comuns de corrupcao -> caractere correto
+  // Baseado em analise dos erros: \n antes de vogal = acento
+  const replacements: [RegExp, string][] = [
+    // Padroes de 3+ newlines (geralmente ç ou acentos compostos)
+    [/\n\n\no/g, "ção"],
+    [/\n\n\na/g, "ça"],
+    [/\n\n\nes/g, "ções"],
+    [/\n\n\n/g, "ç"],
+    
+    // Padroes de 2 newlines
+    [/\n\no/g, "ão"],
+    [/\n\na/g, "ã"],
+    [/\n\nes/g, "ões"],
+    [/\n\n/g, "õ"],
+    
+    // Padroes de 1 newline antes de vogal (acentos agudos/circunflexos)
+    [/a\nl/g, "ál"],
+    [/a\nn/g, "án"],
+    [/a\nr/g, "ár"],
+    [/a\ns/g, "ás"],
+    [/a\nt/g, "át"],
+    [/e\nl/g, "él"],
+    [/e\nn/g, "én"],
+    [/e\nr/g, "ér"],
+    [/e\ns/g, "és"],
+    [/e\nt/g, "ét"],
+    [/i\nl/g, "íl"],
+    [/i\nn/g, "ín"],
+    [/i\nr/g, "ír"],
+    [/i\ns/g, "ís"],
+    [/i\nt/g, "ít"],
+    [/o\nl/g, "ól"],
+    [/o\nn/g, "ón"],
+    [/o\nr/g, "ór"],
+    [/o\ns/g, "ós"],
+    [/o\nt/g, "ót"],
+    [/u\nl/g, "úl"],
+    [/u\nn/g, "ún"],
+    [/u\nr/g, "úr"],
+    [/u\ns/g, "ús"],
+    [/u\nt/g, "út"],
+    
+    // Padroes especificos observados nos logs
+    [/An\nalise/g, "Análise"],
+    [/an\nlise/g, "análise"],
+    [/T\ncnica/g, "Técnica"],
+    [/t\ncnica/g, "técnica"],
+    [/caracter\nstica/g, "característica"],
+    [/ve\nculo/g, "veículo"],
+    [/estrat\ngia/g, "estratégia"],
+    [/p\nblico/g, "público"],
+    [/configura\n/g, "configuraç"],
+    [/inova\n/g, "inovaç"],
+    [/tecnol\ngica/g, "tecnológica"],
+    [/combust\nvel/g, "combustível"],
+    [/emiss\nes/g, "emissões"],
+    [/transmiss\no/g, "transmissão"],
+    [/inje\n/g, "injeç"],
+    [/gera\n/g, "geraç"],
+    [/Ado\n/g, "Adoç"],
+    [/vari\nvel/g, "variável"],
+    [/h\nbrido/g, "híbrido"],
+    [/cabe\ncote/g, "cabeçote"],
+    [/compress\n/g, "compress"],
+    [/implica\n/g, "implicaç"],
+    [/percep\n/g, "percepç"],
+    [/pr\nmio/g, "prêmio"],
+    [/est\ntica/g, "estética"],
+    [/manuten\n/g, "manutençã"],
+    [/Fam\nlias/g, "Famílias"],
+    [/espa\no/g, "espaço"],
+    [/benef\nc/g, "benefíc"],
+    [/condu\n/g, "conduç"],
+    [/efici\nncia/g, "eficiência"],
+    [/pot\nncia/g, "potência"],
+    [/Otimiza\n/g, "Otimizaç"],
+    [/rota\n/g, "rotaç"],
+    [/redu\n/g, "reduç"],
+    [/n\nmero/g, "número"],
+    [/altera\n/g, "alteraç"],
+    [/rela\n/g, "relaç"],
+    [/Implementa\n/g, "Implementaç"],
+    [/carca\na/g, "carcaça"],
+    [/cen\nrio/g, "cenário"],
+    [/evolu\n/g, "evoluç"],
+    [/import\nncia/g, "importância"],
+    [/vers\no/g, "versão"],
+    [/tend\nncia/g, "tendência"],
+    [/eletrifica\n/g, "eletrificaç"],
+    [/automa\n/g, "automaç"],
+    [/experi\nncia/g, "experiência"],
+    [/dire\n/g, "direç"],
+    [/al\nm/g, "além"],
+    [/op\n/g, "opç"],
+    [/acess\nvel/g, "acessível"],
+    [/produ\n/g, "produç"],
+    [/el\ntricas/g, "elétricas"],
+    [/ser\n/g, "será"],
+    [/portf\nlio/g, "portfólio"],
+    [/seguran\na/g, "segurança"],
+    [/assist\nncia/g, "assistência"],
+    [/prov\nveis/g, "prováveis"],
+    [/legisla\n/g, "legislaç"],
+    [/aut\nnoma/g, "autônoma"],
+    [/emerg\nncia/g, "emergência"],
+    [/perman\nncia/g, "permanência"],
+    [/autom\ntico/g, "automático"],
+    [/aut\nnomo/g, "autônomo"],
+    [/Vis\no/g, "Visão"],
+    [/detec\n/g, "detecç"],
+    [/tr\nsito/g, "trânsito"],
+    [/c\nmeras/g, "câmeras"],
+    [/limita\n/g, "limitaç"],
+    [/oportunidades/g, "oportunidades"],
+    [/atualiza\n/g, "atualizaç"],
+    [/aerodin\nmica/g, "aerodinâmica"],
+    [/integra\n/g, "integraç"],
+    [/ilumina\n/g, "iluminaç"],
+    [/Reformula\n/g, "Reformulaç"],
+    [/dimens\nes/g, "dimensões"],
+    
+    // Limpeza final de newlines soltos que sobraram
+    [/([a-zA-Z])\n([a-zA-Z])/g, "$1$2"],
+  ]
+  
+  let result = text
+  for (const [pattern, replacement] of replacements) {
+    result = result.replace(pattern, replacement)
+  }
+  
+  return result
+}
+
 const textField = (label: string, maxLength: number) =>
   z
     .string()
-    .trim()
-    .min(1, `${label} e obrigatorio.`)
-    .max(maxLength, `${label} deve ter no maximo ${maxLength} caracteres.`)
+    .transform((val) => fixCorruptedAccents(val))
+    .transform((val) => val.trim())
+    .refine((val) => val.length >= 1, `${label} e obrigatorio.`)
+    .refine((val) => val.length <= maxLength, `${label} deve ter no maximo ${maxLength} caracteres.`)
 
 const modelQuizAlternativeSchema = z.object({
   text: textField("Texto da alternativa", 240),
@@ -56,14 +212,26 @@ export const missionActivityGenerationSchema = z.object({
   description: textField("Descricao", 800),
   teacherMessage: textField("Mensagem do professor", 400),
   attachmentContext: z.array(textField("Contexto do anexo", 120)).max(10).default([]),
-  missionProofType: missionProofTypeSchema,
-  missionValidation: missionValidationSchema,
+  missionProofType: flexibleProofTypeSchema,
+  missionValidation: flexibleValidationSchema,
 })
 
-export const activityGenerationSchema = z.discriminatedUnion("type", [
-  quizActivityGenerationSchema,
-  missionActivityGenerationSchema,
-])
+// Schema que aceita type em ingles ou portugues e valida de acordo
+// Usa preprocess para normalizar o type antes da validacao
+export const activityGenerationSchema = z.preprocess(
+  (data) => {
+    if (typeof data === "object" && data !== null && "type" in data) {
+      const obj = data as Record<string, unknown>
+      const typeValue = String(obj.type || "").toLowerCase().trim()
+      return { ...obj, type: typeValue === "mission" ? "missao" : typeValue }
+    }
+    return data
+  },
+  z.union([
+    quizActivityGenerationSchema,
+    missionActivityGenerationSchema,
+  ])
+)
 
 export const quizAlternativeSchema = z.object({
   id: textField("ID da alternativa", 80),
@@ -229,15 +397,19 @@ function normalizeProofType(value: unknown): MissionProofType {
     return "video"
   }
 
-  if (token.includes("foto") || token.includes("imagem")) {
+  if (token.includes("foto") || token.includes("imagem") || token.includes("image") || token.includes("photo")) {
     return "foto"
   }
 
-  if (token.includes("arquivo") || token.includes("pdf") || token.includes("document")) {
+  if (token.includes("arquivo") || token.includes("pdf") || token.includes("document") || token.includes("file")) {
     return "arquivo"
   }
 
-  return "texto"
+  if (token.includes("texto") || token.includes("text")) {
+    return "texto"
+  }
+
+  return "foto"
 }
 
 function normalizeValidation(value: unknown): MissionValidation {
