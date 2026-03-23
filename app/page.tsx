@@ -515,6 +515,8 @@ export default function HomePage() {
     }
 
     const prompt = message.trim()
+    setMessage("")
+    setAttachments([])
     const userMessage: ChatMessage = {
       id: createEntityId("message"),
       role: "user",
