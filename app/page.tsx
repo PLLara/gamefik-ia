@@ -1999,126 +1999,128 @@ export default function HomePage() {
     const previewQuestion = currentQuiz?.quizQuestions[0] ?? null
 
     return (
-      <div className="flex flex-1 flex-col items-center justify-center overflow-auto p-6">
+      <div className="flex flex-1 flex-col items-center justify-center overflow-hidden p-6">
         <p className="mb-6 text-center text-sm text-muted-foreground">
           Visualizacao no app — como o aluno vera
         </p>
-        <div className="w-full max-w-[340px]">
-          <div className="overflow-hidden rounded-[3rem] border-[12px] border-gray-900 bg-gray-900 shadow-2xl">
-            <div className="flex items-center justify-between bg-primary px-4 py-2">
-              <span className="text-xs font-medium text-white">9:41</span>
-              <div className="flex items-center gap-1">
-                <div className="h-2.5 w-5 rounded-sm border border-white/50 bg-white/20" />
-                <div className="h-2.5 w-2.5 rounded-full border border-white/50 bg-white/20" />
-              </div>
+        <div className="flex h-full max-h-[720px] w-full items-center justify-center">
+          <div className="w-full max-w-[340px]">
+            <div className="flex h-[640px] flex-col overflow-hidden rounded-[3rem] border-[12px] border-gray-900 bg-gray-900 shadow-2xl">
+              <div className="flex items-center justify-between bg-primary px-4 py-2">
+                <span className="text-xs font-medium text-white">9:41</span>
+                <div className="flex items-center gap-1">
+                  <div className="h-2.5 w-5 rounded-sm border border-white/50 bg-white/20" />
+                  <div className="h-2.5 w-2.5 rounded-full border border-white/50 bg-white/20" />
+                </div>
                 <div className="text-xs font-medium text-white">AAA</div>
-            </div>
-
-            <div className="bg-white">
-              <div className="relative h-44 bg-gradient-to-br from-amber-400 to-orange-500">
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <Image
-                    src="/images/chat-background.jpg"
-                    alt=""
-                    fill
-                    className="object-cover opacity-35"
-                  />
-                </div>
               </div>
 
-              <div className="p-5">
-                <h3 className="mb-3 text-center text-lg font-bold text-gray-900">
-                  {currentActivity.title}
-                </h3>
-
-                <div className="mb-4 flex items-center justify-center gap-3">
-                  <span className="flex items-center gap-1 rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-medium text-emerald-700">
-                    {currentActivity.type === "quiz" ? (
-                      <Gamepad2 className="h-3.5 w-3.5" />
-                    ) : (
-                      <ClipboardList className="h-3.5 w-3.5" />
-                    )}
-                    {currentActivity.type === "quiz"
-                      ? `${quizQuestionCount} questoes`
-                      : currentMission?.missionProofType.toUpperCase()}
-                  </span>
-                </div>
-
-                <div className="mb-4 flex items-center gap-2">
-                  <div className="relative h-8 w-8 overflow-hidden rounded-full bg-gradient-to-br from-amber-100 to-orange-100">
+              <div className="flex min-h-0 flex-1 flex-col bg-white">
+                <div className="relative h-44 bg-gradient-to-br from-amber-400 to-orange-500">
+                  <div className="absolute inset-0 flex items-center justify-center">
                     <Image
-                      src="/images/characters.png"
-                      alt="Professor"
+                      src="/images/chat-background.jpg"
+                      alt=""
                       fill
-                      className="object-cover"
-                      sizes="32px"
+                      className="object-cover opacity-35"
                     />
                   </div>
-                  <div>
-                    <p className="text-[10px] text-gray-500">Criado por</p>
-                    <p className="text-sm font-medium text-gray-900">Professor Gamefik</p>
-                  </div>
                 </div>
 
-                <div className="mb-4">
-                  <p className="text-xs font-semibold text-gray-900">Descricao</p>
-                  <p className="text-sm text-gray-600">{currentActivity.description}</p>
-                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                  <h3 className="mb-3 text-center text-lg font-bold text-gray-900">
+                    {currentActivity.title}
+                  </h3>
 
-                {currentActivity.attachmentContext.length > 0 && (
-                  <div className="mb-4 flex flex-wrap gap-2">
-                    {currentActivity.attachmentContext.map((contextItem) => (
-                      <span
-                        key={contextItem}
-                        className="rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-medium text-violet-700"
-                      >
-                        {contextItem}
-                      </span>
-                    ))}
+                  <div className="mb-4 flex items-center justify-center gap-3">
+                    <span className="flex items-center gap-1 rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-medium text-emerald-700">
+                      {currentActivity.type === "quiz" ? (
+                        <Gamepad2 className="h-3.5 w-3.5" />
+                      ) : (
+                        <ClipboardList className="h-3.5 w-3.5" />
+                      )}
+                      {currentActivity.type === "quiz"
+                        ? `${quizQuestionCount} questoes`
+                        : currentMission?.missionProofType.toUpperCase()}
+                    </span>
                   </div>
-                )}
 
-                {currentActivity.type === "quiz" && previewQuestion ? (
-                  <div className="mb-5 rounded-xl bg-slate-50 p-3">
-                    <p className="mb-2 text-xs font-semibold text-slate-900">
-                      Questao 1
-                    </p>
-                    <p className="mb-3 text-sm text-slate-700">{previewQuestion.enunciado}</p>
-                    <div className="space-y-2">
-                      {previewQuestion.alternatives.map((alternative) => (
-                        <div
-                          key={alternative.id}
-                          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-                        >
-                          <span className="mr-2 font-semibold">{alternative.label}.</span>
-                          {alternative.text}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mb-5 flex items-start gap-2 rounded-lg bg-amber-50 p-3">
-                    <div className="relative h-6 w-6 shrink-0 overflow-hidden rounded-full bg-gradient-to-br from-amber-100 to-orange-100">
+                  <div className="mb-4 flex items-center gap-2">
+                    <div className="relative h-8 w-8 overflow-hidden rounded-full bg-gradient-to-br from-amber-100 to-orange-100">
                       <Image
                         src="/images/characters.png"
-                        alt="Dica"
+                        alt="Professor"
                         fill
                         className="object-cover"
-                        sizes="24px"
+                        sizes="32px"
                       />
                     </div>
-                    <p className="text-xs text-amber-800">{currentActivity.teacherMessage}</p>
+                    <div>
+                      <p className="text-[10px] text-gray-500">Criado por</p>
+                      <p className="text-sm font-medium text-gray-900">Professor Gamefik</p>
+                    </div>
                   </div>
-                )}
 
-                <button className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 text-base font-semibold text-white">
-                  {currentActivity.type === "quiz" ? "Jogar este Quiz" : "Iniciar Missao"}
-                </button>
+                  <div className="mb-4">
+                    <p className="text-xs font-semibold text-gray-900">Descricao</p>
+                    <p className="text-sm text-gray-600">{currentActivity.description}</p>
+                  </div>
+
+                  {currentActivity.attachmentContext.length > 0 && (
+                    <div className="mb-4 flex flex-wrap gap-2">
+                      {currentActivity.attachmentContext.map((contextItem) => (
+                        <span
+                          key={contextItem}
+                          className="rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-medium text-violet-700"
+                        >
+                          {contextItem}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {currentActivity.type === "quiz" && previewQuestion ? (
+                    <div className="mb-5 rounded-xl bg-slate-50 p-3">
+                      <p className="mb-2 text-xs font-semibold text-slate-900">
+                        Questao 1
+                      </p>
+                      <p className="mb-3 text-sm text-slate-700">{previewQuestion.enunciado}</p>
+                      <div className="space-y-2">
+                        {previewQuestion.alternatives.map((alternative) => (
+                          <div
+                            key={alternative.id}
+                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <span className="mr-2 font-semibold">{alternative.label}.</span>
+                            {alternative.text}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mb-5 flex items-start gap-2 rounded-lg bg-amber-50 p-3">
+                      <div className="relative h-6 w-6 shrink-0 overflow-hidden rounded-full bg-gradient-to-br from-amber-100 to-orange-100">
+                        <Image
+                          src="/images/characters.png"
+                          alt="Dica"
+                          fill
+                          className="object-cover"
+                          sizes="24px"
+                        />
+                      </div>
+                      <p className="text-xs text-amber-800">{currentActivity.teacherMessage}</p>
+                    </div>
+                  )}
+
+                  <button className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 text-base font-semibold text-white">
+                    {currentActivity.type === "quiz" ? "Jogar este Quiz" : "Iniciar Missao"}
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div className="flex justify-center bg-white py-2">
-              <div className="h-1 w-28 rounded-full bg-gray-300" />
+              <div className="flex justify-center bg-white py-2">
+                <div className="h-1 w-28 rounded-full bg-gray-300" />
+              </div>
             </div>
           </div>
         </div>
