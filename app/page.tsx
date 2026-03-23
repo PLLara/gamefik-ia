@@ -436,7 +436,7 @@ export default function HomePage() {
   const [currentActivity, setCurrentActivity] = useState<Activity | null>(null)
   const [currentQuestion, setCurrentQuestion] = useState(0)
   const [currentModel, setCurrentModel] = useState<string | null>(null)
-  const [isLocalDebugMode, setIsLocalDebugMode] = useState(false)
+  const [isLocalDebugMode, setIsLocalDebugMode] = useState(true)
   const [showDebugPanel, setShowDebugPanel] = useState(false)
   const [latestGenerationDebug, setLatestGenerationDebug] = useState<GenerationDebugPayload | null>(
     null
