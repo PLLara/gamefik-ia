@@ -65,6 +65,12 @@ type UploadedAttachment = {
   sizeLabel: string
 }
 
+type UserFacingError = {
+  title: string
+  description: string
+  suggestion?: string
+}
+
 type GenerationResponsePayload = {
   operation?: ActivityOperation
   activity?: unknown
@@ -197,6 +203,81 @@ function formatDebugJson(value: unknown) {
     return JSON.stringify(value, null, 2)
   } catch {
     return String(value)
+  }
+}
+
+function normalizeUserFacingError(rawMessage: string): UserFacingError {
+  const normalizedMessage = rawMessage.trim()
+
+  if (normalizedMessage.includes("Array must contain at most 10 element")) {
+    return {
+      title: "Quantidade de questoes acima do permitido",
+      description:
+        "Esse pedido ultrapassou o limite atual de questoes que a interface consegue organizar de uma vez.",
+      suggestion:
+        "Tente pedir um numero menor de questoes agora ou divida em dois pedidos, por exemplo: 'gere 10 agora' e depois 'adicione mais 10'.",
+    }
+  }
+
+  if (normalizedMessage.includes("GEMINI_API_KEY") || normalizedMessage.includes("API de IA nao foi configurada")) {
+    return {
+      title: "Configuração da IA ausente",
+      description:
+        "A chave da IA não está configurada corretamente neste ambiente.",
+      suggestion: "Verifique a configuração da chave da IA e tente novamente.",
+    }
+  }
+
+  if (normalizedMessage.includes("JSON invalido")) {
+    return {
+      title: "Resposta da IA veio em formato inesperado",
+      description:
+        "A resposta recebida não pôde ser interpretada com segurança.",
+      suggestion: "Tente novamente com um pedido mais específico.",
+    }
+  }
+
+  if (normalizedMessage.includes("nao e suportado. Use apenas PDF ou imagem")) {
+    return {
+      title: "Formato de arquivo não suportado",
+      description:
+        "No momento, a interface aceita apenas imagens e arquivos PDF como anexo.",
+      suggestion: "Envie um PDF ou uma imagem e tente novamente.",
+    }
+  }
+
+  if (normalizedMessage.includes("excede o limite de 8 MB")) {
+    return {
+      title: "Arquivo muito grande",
+      description:
+        "Um dos anexos ultrapassou o tamanho máximo permitido.",
+      suggestion: "Reduza o arquivo para menos de 8 MB e tente novamente.",
+    }
+  }
+
+  if (normalizedMessage.includes("Descreva a atividade ou envie ao menos um anexo")) {
+    return {
+      title: "Faltou contexto para gerar a atividade",
+      description:
+        "Nenhum texto nem anexo foi enviado para a IA trabalhar.",
+      suggestion: "Descreva a atividade desejada ou envie um material de apoio.",
+    }
+  }
+
+  if (normalizedMessage.includes("nao conseguiu produzir uma operacao aprovada")) {
+    return {
+      title: "A IA não conseguiu concluir esse pedido",
+      description:
+        "O sistema tentou refinar a resposta, mas não chegou a uma operação segura para aplicar.",
+      suggestion: "Reformule o pedido com mais clareza e tente novamente.",
+    }
+  }
+
+  return {
+    title: "Nao foi possivel concluir sua solicitacao",
+    description:
+      "Aconteceu um problema durante a geracao ou edicao da atividade.",
+    suggestion: "Tente novamente em instantes ou reformule o pedido.",
   }
 }
 
@@ -362,7 +443,7 @@ export default function HomePage() {
   const [messages, setMessages] = useState<ChatMessage[]>([welcomeMessage])
   const [attachments, setAttachments] = useState<UploadedAttachment[]>([])
   const [generationState, setGenerationState] = useState<GenerationState>("idle")
-  const [generationError, setGenerationError] = useState<string | null>(null)
+  const [generationError, setGenerationError] = useState<UserFacingError | null>(null)
   const [currentActivity, setCurrentActivity] = useState<Activity | null>(null)
   const [currentQuestion, setCurrentQuestion] = useState(0)
   const [currentModel, setCurrentModel] = useState<string | null>(null)
@@ -618,12 +699,19 @@ export default function HomePage() {
         error instanceof Error
           ? error.message
           : "Nao foi possivel gerar a atividade no momento."
+      const normalizedError = normalizeUserFacingError(errorMessage)
 
       setGenerationState("error")
-      setGenerationError(errorMessage)
+      setGenerationError(normalizedError)
       setStreamingPreviewAttempt(null)
-      replaceAssistantMessage(pendingMessageId, errorMessage)
-      toast.error(errorMessage)
+      setStreamingPreviewModel(null)
+      replaceAssistantMessage(
+        pendingMessageId,
+        `${normalizedError.title}. ${normalizedError.description}${
+          normalizedError.suggestion ? ` ${normalizedError.suggestion}` : ""
+        }`
+      )
+      toast.error(normalizedError.title)
     } finally {
       setMessage("")
       setAttachments([])
@@ -1510,8 +1598,18 @@ export default function HomePage() {
               />
 
               {generationError && (
-                <div className="mx-4 rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                  {generationError}
+                <div className="mx-4 rounded-2xl border border-destructive/20 bg-destructive/5 px-4 py-4">
+                  <div className="mb-1 text-sm font-semibold text-destructive">
+                    {generationError.title}
+                  </div>
+                  <p className="text-sm text-destructive/90">
+                    {generationError.description}
+                  </p>
+                  {generationError.suggestion && (
+                    <p className="mt-2 text-xs font-medium text-destructive/80">
+                      {generationError.suggestion}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -2218,8 +2316,18 @@ export default function HomePage() {
               )}
 
               {generationError && (
-                <div className="mb-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                  {generationError}
+                <div className="mb-3 rounded-2xl border border-destructive/20 bg-destructive/5 px-4 py-4">
+                  <div className="mb-1 text-sm font-semibold text-destructive">
+                    {generationError.title}
+                  </div>
+                  <p className="text-sm text-destructive/90">
+                    {generationError.description}
+                  </p>
+                  {generationError.suggestion && (
+                    <p className="mt-2 text-xs font-medium text-destructive/80">
+                      {generationError.suggestion}
+                    </p>
+                  )}
                 </div>
               )}
 
