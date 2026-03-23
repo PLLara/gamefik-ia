@@ -2383,17 +2383,6 @@ export default function HomePage() {
               : renderPreview()}
           </div>
         </div>
-        <div className="flex items-center justify-between border-t border-border bg-card px-4 py-3">
-          <button
-            type="button"
-            onClick={saveCurrentActivity}
-            disabled={!currentActivity}
-            className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-sidebar-accent disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Save className="h-4 w-4" />
-            Salvar rascunho
-          </button>
-        </div>
       </div>
       {renderDebugControls()}
     </>
