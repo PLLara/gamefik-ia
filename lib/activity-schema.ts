@@ -68,7 +68,7 @@ export const quizActivityGenerationSchema = z.object({
 })
 
 export const missionActivityGenerationSchema = z.object({
-  type: z.literal("missao").or(z.literal("mission")).transform(() => "missao" as const),
+  type: z.literal("missao"),
   title: textField("Titulo", 120),
   description: textField("Descricao", 800),
   teacherMessage: textField("Mensagem do professor", 400),
@@ -78,14 +78,21 @@ export const missionActivityGenerationSchema = z.object({
 })
 
 // Schema que aceita type em ingles ou portugues e valida de acordo
-export const activityGenerationSchema = z.union([
-  quizActivityGenerationSchema,
-  missionActivityGenerationSchema,
-]).transform((data) => {
-  // Garante que o type esta normalizado
-  if (data.type === "quiz") return data
-  return { ...data, type: "missao" as const }
-})
+// Usa preprocess para normalizar o type antes da validacao
+export const activityGenerationSchema = z.preprocess(
+  (data) => {
+    if (typeof data === "object" && data !== null && "type" in data) {
+      const obj = data as Record<string, unknown>
+      const typeValue = String(obj.type || "").toLowerCase().trim()
+      return { ...obj, type: typeValue === "mission" ? "missao" : typeValue }
+    }
+    return data
+  },
+  z.union([
+    quizActivityGenerationSchema,
+    missionActivityGenerationSchema,
+  ])
+)
 
 export const quizAlternativeSchema = z.object({
   id: textField("ID da alternativa", 80),
