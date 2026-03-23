@@ -14,12 +14,15 @@ import {
   Eye,
   FileText,
   Gamepad2,
+  GraduationCap,
+  Hash,
   ImageIcon,
   Paperclip,
   Pencil,
   Plus,
   Save,
   Send,
+  Settings2,
   Sparkles,
   Target,
   Trash2,
@@ -449,6 +452,11 @@ export default function HomePage() {
   const [streamingPhase, setStreamingPhase] = useState<string | null>(null)
   const [detectedActivityType, setDetectedActivityType] = useState<"quiz" | "missao" | null>(null)
   const [userOverrideType, setUserOverrideType] = useState<"quiz" | "missao" | null>(null)
+  
+  // Parametros opcionais de geracao
+  const [selectedDifficulty, setSelectedDifficulty] = useState<string | null>(null)
+  const [selectedQuestionCount, setSelectedQuestionCount] = useState<number | null>(null)
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
@@ -561,11 +569,42 @@ export default function HomePage() {
       return
     }
 
-    const prompt = message.trim()
+    const basePrompt = message.trim()
+    
+    // Constroi o prompt com os parametros selecionados
+    const promptParts: string[] = [basePrompt]
+    
+    if (userOverrideType) {
+      promptParts.push(`[Tipo: ${userOverrideType === "quiz" ? "Quiz" : "Missao"}]`)
+    }
+    
+    if (selectedDifficulty) {
+      const difficultyLabels: Record<string, string> = {
+        crianca: "nivel crianca (4-6 anos)",
+        fundamental1: "nivel ensino fundamental I (7-10 anos)",
+        fundamental2: "nivel ensino fundamental II (11-14 anos)",
+        medio: "nivel ensino medio",
+        enem: "nivel ENEM",
+        faculdade: "nivel faculdade/graduacao",
+        pos: "nivel pos-graduacao",
+      }
+      promptParts.push(`[Dificuldade: ${difficultyLabels[selectedDifficulty] || selectedDifficulty}]`)
+    }
+    
+    if (selectedQuestionCount && (userOverrideType === "quiz" || detectedActivityType === "quiz" || !userOverrideType)) {
+      promptParts.push(`[Quantidade: ${selectedQuestionCount} questoes]`)
+    }
+    
+    const prompt = promptParts.join(" ")
+    
     setMessage("")
     setAttachments([])
     setDetectedActivityType(null)
     setUserOverrideType(null)
+    setSelectedDifficulty(null)
+    setSelectedQuestionCount(null)
+    setShowAdvancedOptions(false)
+    
     const userMessage: ChatMessage = {
       id: createEntityId("message"),
       role: "user",
@@ -1690,6 +1729,91 @@ export default function HomePage() {
                 className="w-full resize-none rounded-t-[14px] bg-transparent px-5 py-4 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground transition-all duration-200 focus:bg-muted/30"
               />
 
+              {/* Parametros opcionais */}
+              <div className="border-t border-border/50 px-4 py-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                  <span>Opcoes</span>
+                  <ChevronDown className={cn("h-3 w-3 transition-transform duration-200", showAdvancedOptions && "rotate-180")} />
+                </button>
+                
+                {showAdvancedOptions && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 animate-fade-in">
+                    {/* Tipo de atividade */}
+                    <div className="relative">
+                      <select
+                        value={userOverrideType || ""}
+                        onChange={(e) => setUserOverrideType(e.target.value as "quiz" | "missao" | null || null)}
+                        className="appearance-none rounded-lg border border-border/60 bg-card/80 pl-3 pr-7 py-1.5 text-xs font-medium text-foreground outline-none transition-all duration-200 hover:border-primary/40 focus:border-primary/60 focus:ring-1 focus:ring-primary/20"
+                      >
+                        <option value="">Tipo: Auto</option>
+                        <option value="quiz">Quiz</option>
+                        <option value="missao">Missao</option>
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                    </div>
+
+                    {/* Dificuldade */}
+                    <div className="relative">
+                      <select
+                        value={selectedDifficulty || ""}
+                        onChange={(e) => setSelectedDifficulty(e.target.value || null)}
+                        className="appearance-none rounded-lg border border-border/60 bg-card/80 pl-3 pr-7 py-1.5 text-xs font-medium text-foreground outline-none transition-all duration-200 hover:border-primary/40 focus:border-primary/60 focus:ring-1 focus:ring-primary/20"
+                      >
+                        <option value="">Dificuldade: Auto</option>
+                        <option value="crianca">Crianca (4-6 anos)</option>
+                        <option value="fundamental1">Fundamental I (7-10 anos)</option>
+                        <option value="fundamental2">Fundamental II (11-14 anos)</option>
+                        <option value="medio">Ensino Medio</option>
+                        <option value="enem">Nivel ENEM</option>
+                        <option value="faculdade">Nivel Faculdade</option>
+                        <option value="pos">Pos-graduacao</option>
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                    </div>
+
+                    {/* Quantidade de questoes (apenas para quiz) */}
+                    {(userOverrideType === "quiz" || detectedActivityType === "quiz" || (!userOverrideType && !detectedActivityType)) && (
+                      <div className="relative animate-fade-in">
+                        <select
+                          value={selectedQuestionCount || ""}
+                          onChange={(e) => setSelectedQuestionCount(e.target.value ? Number(e.target.value) : null)}
+                          className="appearance-none rounded-lg border border-border/60 bg-card/80 pl-3 pr-7 py-1.5 text-xs font-medium text-foreground outline-none transition-all duration-200 hover:border-primary/40 focus:border-primary/60 focus:ring-1 focus:ring-primary/20"
+                        >
+                          <option value="">Questoes: Auto</option>
+                          <option value="3">3 questoes</option>
+                          <option value="5">5 questoes</option>
+                          <option value="10">10 questoes</option>
+                          <option value="15">15 questoes</option>
+                          <option value="20">20 questoes</option>
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                      </div>
+                    )}
+
+                    {/* Indicador de parametros selecionados */}
+                    {(selectedDifficulty || selectedQuestionCount || userOverrideType) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDifficulty(null)
+                          setSelectedQuestionCount(null)
+                          setUserOverrideType(null)
+                        }}
+                        className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                        Limpar
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {generationError && (
                 <div className="mx-4 rounded-2xl border border-destructive/20 bg-destructive/5 px-4 py-4 animate-fade-in-up">
                   <div className="mb-1 text-sm font-semibold text-destructive">
@@ -1732,33 +1856,6 @@ export default function HomePage() {
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {/* Indicador de tipo de atividade detectado */}
-                  {(detectedActivityType || userOverrideType) && message.trim() && (
-                    <div className="flex items-center animate-fade-in">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const currentType = userOverrideType || detectedActivityType
-                          setUserOverrideType(currentType === "quiz" ? "missao" : "quiz")
-                        }}
-                        className="group flex items-center gap-1.5 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-all duration-200 hover:border-primary/40 hover:bg-primary/5 hover:text-foreground"
-                      >
-                        {(userOverrideType || detectedActivityType) === "quiz" ? (
-                          <>
-                            <Gamepad2 className="h-3.5 w-3.5 text-primary/70" />
-                            <span>Quiz</span>
-                          </>
-                        ) : (
-                          <>
-                            <Target className="h-3.5 w-3.5 text-amber-500/70" />
-                            <span>Missao</span>
-                          </>
-                        )}
-                        <ChevronDown className="h-3 w-3 opacity-50 transition-transform duration-200 group-hover:rotate-180" />
-                      </button>
-                    </div>
-                  )}
-
                 <button
                   type="submit"
                   disabled={!canSubmit}
