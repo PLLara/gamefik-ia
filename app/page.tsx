@@ -152,13 +152,6 @@ const welcomeMessage: ChatMessage = {
     "Ola! Descreva a atividade que voce quer criar ou envie materiais em PDF/imagem. Eu gero um quiz ou uma missao completos para voce.",
 }
 
-const quickChips = [
-  "Quiz sobre fotossintese para o 7o ano com 5 questoes",
-  "Missao de leitura com comprovante em foto",
-  "Atividade baseada no material anexado",
-  "Quiz de revisao antes da prova",
-]
-
 function formatFileSize(bytes: number) {
   if (bytes < 1024) {
     return `${bytes} B`
@@ -719,10 +712,6 @@ export default function HomePage() {
         fileInputRef.current.value = ""
       }
     }
-  }
-
-  const handleQuickChip = (chip: string) => {
-    setMessage(chip)
   }
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1676,18 +1665,6 @@ export default function HomePage() {
           </div>
         )}
 
-        <div className="chat-hero-animate chat-hero-delay-4 mt-8 flex flex-wrap items-center justify-center gap-2">
-          {quickChips.map((chip) => (
-            <button
-              key={chip}
-              type="button"
-              onClick={() => handleQuickChip(chip)}
-              className="rounded-full border border-primary/15 bg-card/70 px-3 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm transition-colors hover:bg-card"
-            >
-              {chip}
-            </button>
-          ))}
-        </div>
       </div>
     </div>
   )
@@ -2266,19 +2243,6 @@ export default function HomePage() {
                 ))}
                 <div ref={chatEndRef} />
               </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2 border-t border-border px-4 py-3">
-              {quickChips.map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => handleQuickChip(chip)}
-                  className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-sidebar-accent"
-                >
-                  {chip}
-                </button>
-              ))}
             </div>
 
             <form onSubmit={handleSubmit} className="border-t border-border p-4">
