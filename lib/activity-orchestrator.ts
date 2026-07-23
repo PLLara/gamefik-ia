@@ -1,4 +1,4 @@
-import type { Part } from "@google/genai"
+import type { GenerateContentResponse, Part } from "@google/genai"
 import { z } from "zod"
 import {
   activityOperationSchema,
@@ -17,11 +17,11 @@ import {
   buildPlannerPrompt,
   buildReviewerPrompt,
   buildRouterPrompt,
-  executorSystemInstruction,
-  plannerSystemInstruction,
+  getExecutorSystemInstruction,
+  getPlannerSystemInstruction,
   reviewerJsonSchema,
-  reviewerSystemInstruction,
-  routerSystemInstruction,
+  getReviewerSystemInstruction,
+  getRouterSystemInstruction,
 } from "@/lib/activity-operation-prompts"
 import { type AttachmentDescriptor } from "@/lib/activity-prompts"
 import { activitySchema, toActivityFromModel, type Activity } from "@/lib/activity-schema"
@@ -37,6 +37,7 @@ import {
   getGeminiClient,
   getGeminiThinkingConfig,
 } from "@/lib/gemini"
+import { getStrings, type SupportedLanguage } from "@/lib/i18n"
 
 type RecentMessage = {
   role: "user" | "ai"
@@ -125,6 +126,7 @@ type OrchestrationOptions = {
   attachmentParts: Part[]
   recentMessages: RecentMessage[]
   debugPayload: GenerationDebugPayload | null
+  language: SupportedLanguage
   emit?: (event: OrchestrationEvent) => void
 }
 
@@ -287,6 +289,7 @@ async function callExecutorStream({
   emit,
   attemptNumber,
   debugPayload,
+  systemInstruction,
 }: {
   expectedAction: ActivityOperation["action"]
   promptText: string
@@ -294,6 +297,7 @@ async function callExecutorStream({
   emit?: (event: OrchestrationEvent) => void
   attemptNumber: number
   debugPayload: GenerationDebugPayload | null
+  systemInstruction: string
 }) {
   const gemini = await getGeminiClient()
   const model = GEMINI_MODEL
@@ -301,9 +305,9 @@ async function callExecutorStream({
   const startedAtMs = Date.now()
   const streamChunks: DebugStreamChunk[] = []
   let responseText = ""
-  let lastChunk: Awaited<ReturnType<typeof stream.next>>["value"] | null = null
+  let lastChunk: GenerateContentResponse | null = null
 
-  setDebugPromptContext(debugPayload, executorSystemInstruction, promptText)
+  setDebugPromptContext(debugPayload, systemInstruction, promptText)
 
   emit?.({
     type: "attempt_start",
@@ -327,7 +331,7 @@ async function callExecutorStream({
         temperature: 0.15,
         responseMimeType: "application/json",
         responseJsonSchema: getActivityOperationJsonSchema(expectedAction),
-        systemInstruction: executorSystemInstruction,
+        systemInstruction,
         ...(getGeminiThinkingConfig(model)
           ? {
               thinkingConfig: getGeminiThinkingConfig(model),
@@ -370,13 +374,13 @@ async function callExecutorStream({
 
     return {
       model,
-      systemInstruction: executorSystemInstruction,
+      systemInstruction,
       operation,
       promptText,
       responseText,
       startedAt: startedAt.toISOString(),
       durationMs: Date.now() - startedAtMs,
-      usageMetadata: toPlainJson(lastChunk?.usageMetadata),
+      usageMetadata: toPlainJson(lastChunk?.usageMetadata) ?? null,
       streamChunks,
     } satisfies ExecutorResult
   } catch (error) {
@@ -388,7 +392,7 @@ async function callExecutorStream({
         attemptNumber,
         startedAt: startedAt.toISOString(),
         durationMs,
-        systemInstruction: executorSystemInstruction,
+        systemInstruction,
         promptText,
         requestConfig: {
           model,
@@ -399,7 +403,7 @@ async function callExecutorStream({
         responseText: responseText || null,
         responseId: null,
         modelVersion: model,
-        usageMetadata: toPlainJson(lastChunk?.usageMetadata),
+        usageMetadata: toPlainJson(lastChunk?.usageMetadata) ?? null,
         promptFeedback: null,
         candidates: [],
         streamChunks,
@@ -429,30 +433,33 @@ async function callExecutorStream({
 function buildAssistantMessage(
   operation: ActivityOperation,
   nextActivity: Activity | null,
-  routerDecision: RouterDecision
+  routerDecision: RouterDecision,
+  language: SupportedLanguage
 ) {
+  const strings = getStrings(language).assistantMessage
+
   if (operation.action === "ask_clarification") {
     return (operation.payload as { question: string }).question
   }
 
   if (operation.action === "append_questions" && nextActivity?.type === "quiz") {
-    return `Adicionei ${operation.payload.questions.length} questoes novas ao quiz sem recriar o restante.`
+    return strings.appendQuestions(operation.payload.questions.length)
   }
 
   if (operation.action === "update_metadata") {
-    return "Atualizei os metadados pedidos sem recriar a atividade inteira."
+    return strings.updateMetadata
   }
 
   if (operation.action === "replace_question") {
-    return "Atualizei a questao solicitada sem alterar o restante do quiz."
+    return strings.replaceQuestion
   }
 
   if (operation.action === "mission_adjustment") {
-    return "Ajustei a missao de forma localizada, preservando o restante da atividade."
+    return strings.missionAdjustment
   }
 
   if (operation.action === "remove_question") {
-    return "Removi a questao solicitada e preservei o restante do quiz."
+    return strings.removeQuestion
   }
 
   if (operation.action === "full_regeneration") {
@@ -480,7 +487,10 @@ function getPreRoutingClarificationQuestion({
   userPrompt,
   currentActivity,
   attachments,
-}: Pick<OrchestrationOptions, "userPrompt" | "currentActivity" | "attachments">) {
+  language,
+}: Pick<OrchestrationOptions, "userPrompt" | "currentActivity" | "attachments" | "language">) {
+  const strings = getStrings(language)
+
   if (currentActivity || attachments.length > 0) {
     return null
   }
@@ -488,12 +498,12 @@ function getPreRoutingClarificationQuestion({
   const strippedPrompt = stripPromptMetadata(userPrompt)
 
   if (!strippedPrompt) {
-    return "Pode me dizer qual conteudo voce quer cobrar na atividade ou enviar um PDF/imagem de referencia?"
+    return strings.preRoutingClarification.emptyPrompt
   }
 
   const wordCount = strippedPrompt.split(/\s+/).filter(Boolean).length
   const hasInstructionalContext =
-    /\b(sobre|com base|baseado|a partir|usando|considere|explique|aborde|compare|inclua|objetivo|contexto|material|texto|artigo|capitulo|pdf|imagem|documento|manual|resumo|conteudo|tema)\b/i.test(
+    /\b(sobre|com base|baseado|a partir|usando|considere|explique|aborde|compare|inclua|objetivo|contexto|material|texto|artigo|capitulo|pdf|imagem|documento|manual|resumo|conteudo|tema|about|based on|using|consider|explain|include|objective|context|material|text|article|chapter|summary|theme)\b/i.test(
       strippedPrompt
     )
   const looksLikeBareTopic =
@@ -507,7 +517,7 @@ function getPreRoutingClarificationQuestion({
     return null
   }
 
-  return `Antes de montar a atividade sobre "${strippedPrompt}", preciso de uma base melhor para nao inventar conteudo. Envie um PDF/imagem ou descreva os topicos, fatos e recorte que devem ser cobrados.`
+  return strings.preRoutingClarification.bareTopic(strippedPrompt)
 }
 
 export async function orchestrateActivityOperation({
@@ -517,14 +527,17 @@ export async function orchestrateActivityOperation({
   attachmentParts,
   recentMessages,
   debugPayload,
+  language,
   emit,
 }: OrchestrationOptions): Promise<OrchestrationResult> {
+  const strings = getStrings(language)
+
   emit?.({
     type: "phase_update",
     data: {
       phase: "router",
       model: GEMINI_MODEL,
-      message: "Analisando a intencao do pedido...",
+      message: strings.routerPhaseMessages.analyzing,
     },
   })
 
@@ -532,6 +545,7 @@ export async function orchestrateActivityOperation({
     userPrompt,
     currentActivity,
     attachments,
+    language,
   })
 
   if (preRoutingClarificationQuestion) {
@@ -543,13 +557,13 @@ export async function orchestrateActivityOperation({
     }) as Extract<ActivityOperation, { action: "ask_clarification" }>
 
     if (debugPayload) {
-      debugPayload.systemInstruction = routerSystemInstruction
+      debugPayload.systemInstruction = getRouterSystemInstruction(language)
       debugPayload.basePrompt = buildRouterPrompt({
         userPrompt,
         currentActivity,
         attachments,
         recentMessages,
-      })
+      }, language)
       debugPayload.finalOperation = toPlainJson(clarificationOperation)
       debugPayload.finalNormalizedPayload = toPlainJson(clarificationOperation)
     }
@@ -559,7 +573,7 @@ export async function orchestrateActivityOperation({
       data: {
         phase: "clarification",
         model: null,
-        message: "Pedido sem base suficiente; solicitando esclarecimento antes de gerar.",
+        message: strings.routerPhaseMessages.clarificationNeeded,
       },
     })
 
@@ -587,8 +601,8 @@ export async function orchestrateActivityOperation({
       currentActivity,
       attachments,
       recentMessages,
-    }),
-    systemInstruction: routerSystemInstruction,
+    }, language),
+    systemInstruction: getRouterSystemInstruction(language),
     jsonSchema: routerDecisionJsonSchema,
     parser: routerDecisionSchema,
     debugPayload,
@@ -614,7 +628,7 @@ export async function orchestrateActivityOperation({
     data: {
       phase: normalizedRouterDecision.action === "ask_clarification" ? "clarification" : "planner",
       model: routerResult.model,
-      message: `Acao escolhida: ${normalizedRouterDecision.action}.`,
+      message: strings.routerPhaseMessages.actionChosen(normalizedRouterDecision.action),
     },
   })
 
@@ -654,8 +668,8 @@ export async function orchestrateActivityOperation({
       attachments,
       recentMessages,
       routerDecision: normalizedRouterDecision,
-    }),
-    systemInstruction: plannerSystemInstruction,
+    }, language),
+    systemInstruction: getPlannerSystemInstruction(language),
     jsonSchema: operationPlannerJsonSchema,
     parser: operationPlannerSchema,
     debugPayload,
@@ -689,8 +703,8 @@ export async function orchestrateActivityOperation({
         model: GEMINI_MODEL,
         message:
           executorAttemptNumber === 1
-            ? "Executando a operacao pedida..."
-            : `Refinando a execucao (${executorAttemptNumber})...`,
+            ? strings.executorPhaseMessages.executing
+            : strings.executorPhaseMessages.refining(executorAttemptNumber),
       },
     })
 
@@ -701,7 +715,7 @@ export async function orchestrateActivityOperation({
       recentMessages,
       routerDecision: normalizedRouterDecision,
       planner: normalizedPlanner,
-    })}${feedbackForExecutor ? `\n\nFeedback de revisao para corrigir:\n${feedbackForExecutor}` : ""}`
+    }, language)}${feedbackForExecutor ? `\n\nFeedback de revisao para corrigir:\n${feedbackForExecutor}` : ""}`
 
     const executorResult = await callExecutorStream({
       expectedAction: normalizedPlanner.action,
@@ -710,6 +724,7 @@ export async function orchestrateActivityOperation({
       emit,
       attemptNumber: executorAttemptNumber,
       debugPayload,
+      systemInstruction: getExecutorSystemInstruction(language),
     })
 
     const attemptDebug: DebugGenerationAttempt = {
@@ -746,7 +761,7 @@ export async function orchestrateActivityOperation({
       data: {
         phase: "reviewer",
         model: GEMINI_MODEL,
-        message: "Revisando se a operacao realmente cumpre o pedido...",
+        message: strings.reviewerPhaseMessage,
       },
     })
 
@@ -761,8 +776,8 @@ export async function orchestrateActivityOperation({
         routerDecision: normalizedRouterDecision,
         planner: normalizedPlanner,
         operationResult: executorResult.operation,
-      }),
-      systemInstruction: reviewerSystemInstruction,
+      }, language),
+      systemInstruction: getReviewerSystemInstruction(language),
       jsonSchema: reviewerJsonSchema,
       parser: z.object({
         approved: z.boolean(),
@@ -833,7 +848,7 @@ export async function orchestrateActivityOperation({
       data: {
         phase: "patch",
         model: null,
-        message: "Aplicando patch na atividade atual...",
+        message: strings.patchPhaseMessage,
       },
     })
 
@@ -853,7 +868,8 @@ export async function orchestrateActivityOperation({
       assistantMessage: buildAssistantMessage(
         executorResult.operation,
         nextActivity,
-        normalizedRouterDecision
+        normalizedRouterDecision,
+        language
       ),
       model: executorResult.model,
       routerDecision: normalizedRouterDecision,

@@ -50,6 +50,13 @@ import {
   type QuizQuestion,
 } from "@/lib/activity-schema"
 import { type GenerationDebugPayload } from "@/lib/generation-debug"
+import {
+  DEFAULT_LANGUAGE,
+  detectLanguageFromPrompt,
+  detectBrowserLanguage,
+  getStrings,
+  type SupportedLanguage,
+} from "@/lib/i18n"
 
 type ViewMode = "initial" | "creating"
 type RightPanelView = "preview" | "editor"
@@ -168,11 +175,12 @@ type StreamingGenerationEvent =
       }
     }
 
-const welcomeMessage: ChatMessage = {
-  id: "welcome-message",
-  role: "ai",
-  content:
-    "Ola! Descreva a atividade que voce quer criar ou envie materiais em PDF/imagem. Eu gero um quiz ou uma missao completos para voce.",
+function getWelcomeMessage(language: SupportedLanguage): ChatMessage {
+  return {
+    id: "welcome-message",
+    role: "ai",
+    content: getStrings(language).welcomeMessage,
+  }
 }
 
 function formatFileSize(bytes: number) {
@@ -187,37 +195,42 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function buildUserMessage(prompt: string, attachments: UploadedAttachment[]) {
+function buildUserMessage(prompt: string, attachments: UploadedAttachment[], language: SupportedLanguage) {
   const trimmedPrompt = prompt.trim()
+  const strings = getStrings(language)
 
   if (trimmedPrompt.length > 0) {
     return trimmedPrompt
   }
 
   if (attachments.length === 1) {
-    return `Gerar atividade a partir do anexo "${attachments[0].name}".`
+    return strings.buildUserMessage.singleAttachment(attachments[0].name)
   }
 
-  return `Gerar atividade usando ${attachments.length} anexos enviados.`
+  return strings.buildUserMessage.multipleAttachments(attachments.length)
 }
 
-function buildClarificationFollowUpPrompt({
-  originalPrompt,
-  latestQuestion,
-  followUpPrompt,
-}: PendingClarificationContext & {
-  followUpPrompt: string
-}) {
+function buildClarificationFollowUpPrompt(
+  {
+    originalPrompt,
+    latestQuestion,
+    followUpPrompt,
+  }: PendingClarificationContext & {
+    followUpPrompt: string
+  },
+  language: SupportedLanguage
+) {
+  const strings = getStrings(language)
   return [
-    "Continuacao da mesma solicitacao anterior.",
+    strings.buildClarificationFollowUp.header,
     "",
-    `Pedido original do usuario:\n${originalPrompt}`,
+    `${strings.buildClarificationFollowUp.originalPrompt}\n${originalPrompt}`,
     "",
-    `Pergunta de esclarecimento feita pela IA:\n${latestQuestion}`,
+    `${strings.buildClarificationFollowUp.clarificationQuestion}\n${latestQuestion}`,
     "",
-    `Resposta atual do usuario:\n${followUpPrompt}`,
+    `${strings.buildClarificationFollowUp.userResponse}\n${followUpPrompt}`,
     "",
-    "Trate a resposta atual como complemento do pedido original, nao como uma nova solicitacao isolada.",
+    strings.buildClarificationFollowUp.footer,
   ].join("\n")
 }
 
@@ -260,98 +273,69 @@ function formatDebugJson(value: unknown) {
   }
 }
 
-function normalizeUserFacingError(rawMessage: string): UserFacingError {
+function normalizeUserFacingError(rawMessage: string, language: SupportedLanguage): UserFacingError {
   const normalizedMessage = rawMessage.trim()
+  const errors = getStrings(language).userFacingErrors
 
   if (normalizedMessage.includes("Array must contain at most 10 element")) {
-    return {
-      title: "Quantidade de questoes acima do permitido",
-      description:
-        "Esse pedido ultrapassou o limite atual de questoes que a interface consegue organizar de uma vez.",
-      suggestion:
-        "Tente pedir um numero menor de questoes agora ou divida em dois pedidos, por exemplo: 'gere 10 agora' e depois 'adicione mais 10'.",
-    }
+    return errors.tooManyQuestions
   }
 
   if (normalizedMessage.includes("GEMINI_API_KEY") || normalizedMessage.includes("API de IA nao foi configurada")) {
-    return {
-      title: "Configuração da IA ausente",
-      description:
-        "A chave da IA não está configurada corretamente neste ambiente.",
-      suggestion: "Verifique a configuração da chave da IA e tente novamente.",
-    }
+    return errors.missingApiKey
   }
 
   if (normalizedMessage.includes("JSON invalido")) {
-    return {
-      title: "Resposta da IA veio em formato inesperado",
-      description:
-        "A resposta recebida não pôde ser interpretada com segurança.",
-      suggestion: "Tente novamente com um pedido mais específico.",
-    }
+    return errors.invalidJson
   }
 
-  if (normalizedMessage.includes("nao e suportado. Use apenas PDF ou imagem")) {
-    return {
-      title: "Formato de arquivo não suportado",
-      description:
-        "No momento, a interface aceita apenas imagens e arquivos PDF como anexo.",
-      suggestion: "Envie um PDF ou uma imagem e tente novamente.",
-    }
+  if (
+    /nao e suportado|not supported|no es compatible/i.test(normalizedMessage)
+  ) {
+    return errors.unsupportedFormat
   }
 
-  if (normalizedMessage.includes("excede o limite de 8 MB")) {
-    return {
-      title: "Arquivo muito grande",
-      description:
-        "Um dos anexos ultrapassou o tamanho máximo permitido.",
-      suggestion: "Reduza o arquivo para menos de 8 MB e tente novamente.",
-    }
+  if (
+    /excede o limite de 8 MB|exceeds the 8 MB limit/i.test(normalizedMessage)
+  ) {
+    return errors.fileTooLarge
   }
 
-  if (normalizedMessage.includes("Descreva a atividade ou envie ao menos um anexo")) {
-    return {
-      title: "Faltou contexto para gerar a atividade",
-      description:
-        "Nenhum texto nem anexo foi enviado para a IA trabalhar.",
-      suggestion: "Descreva a atividade desejada ou envie um material de apoio.",
-    }
+  if (
+    /Descreva a atividade ou envie ao menos um anexo|Describe the activity or send at least one attachment|Describe la actividad o envia al menos un adjunto/i.test(
+      normalizedMessage
+    )
+  ) {
+    return errors.missingContext
   }
 
   if (normalizedMessage.includes("nao conseguiu produzir uma operacao aprovada")) {
-    return {
-      title: "A IA não conseguiu concluir esse pedido",
-      description:
-        "O sistema tentou refinar a resposta, mas não chegou a uma operação segura para aplicar.",
-      suggestion: "Reformule o pedido com mais clareza e tente novamente.",
-    }
+    return errors.generationFailed
   }
 
-  return {
-    title: "Nao foi possivel concluir sua solicitacao",
-    description:
-      "Aconteceu um problema durante a geracao ou edicao da atividade.",
-    suggestion: "Tente novamente em instantes ou reformule o pedido.",
-  }
+  return errors.defaultError
 }
 
 function getModelDisplayName(
   rawModel: string | null | undefined,
-  debugPayload: GenerationDebugPayload | null
+  debugPayload: GenerationDebugPayload | null,
+  language: SupportedLanguage
 ) {
   if (!rawModel) {
     return "n/a"
   }
 
+  const strings = getStrings(language).modelDisplayNames
+
   if (rawModel === debugPayload?.fallbackModel) {
-    return "modelo de reserva"
+    return strings.fallback
   }
 
   if (rawModel === debugPayload?.model || rawModel === debugPayload?.finalModel) {
-    return "modelo principal"
+    return strings.primary
   }
 
-  return "modelo de IA"
+  return strings.generic
 }
 
 function sanitizeProviderText(value: string) {
@@ -361,22 +345,22 @@ function sanitizeProviderText(value: string) {
     .replace(/gemini/gi, "modelo de IA")
 }
 
-function sanitizeDebugValue(value: unknown, debugPayload: GenerationDebugPayload | null): unknown {
+function sanitizeDebugValue(value: unknown, debugPayload: GenerationDebugPayload | null, language: SupportedLanguage): unknown {
   if (typeof value === "string") {
     return sanitizeProviderText(value)
   }
 
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeDebugValue(item, debugPayload))
+    return value.map((item) => sanitizeDebugValue(item, debugPayload, language))
   }
 
   if (value && typeof value === "object") {
     const sanitizedEntries = Object.entries(value).map(([key, entryValue]) => {
       if (key === "model" || key === "finalModel" || key === "fallbackModel" || key === "modelVersion") {
-        return [key, getModelDisplayName(String(entryValue ?? ""), debugPayload)]
+        return [key, getModelDisplayName(String(entryValue ?? ""), debugPayload, language)]
       }
 
-      return [key, sanitizeDebugValue(entryValue, debugPayload)]
+      return [key, sanitizeDebugValue(entryValue, debugPayload, language)]
     })
 
     return Object.fromEntries(sanitizedEntries)
@@ -385,12 +369,13 @@ function sanitizeDebugValue(value: unknown, debugPayload: GenerationDebugPayload
   return value
 }
 
-function formatDebugReport(debugPayload: GenerationDebugPayload | null) {
+function formatDebugReport(debugPayload: GenerationDebugPayload | null, language: SupportedLanguage) {
+  const strings = getStrings(language)
   if (!debugPayload) {
-    return "Ainda nao ha logs. Gere uma atividade para popular este painel."
+    return strings.debugMessages.noLogsYet
   }
 
-  const sanitizedPayload = sanitizeDebugValue(debugPayload, debugPayload) as GenerationDebugPayload
+  const sanitizedPayload = sanitizeDebugValue(debugPayload, debugPayload, language) as GenerationDebugPayload
 
   return [
     "=== DEBUG IA ===",
@@ -489,12 +474,92 @@ async function readStreamingEvents(
   }
 }
 
+const STORAGE_KEY = "gamefik-ia-session-v1"
+
+type PersistedSession = {
+  messages: ChatMessage[]
+  currentActivity: Activity | null
+  viewMode: ViewMode
+  rightPanel: RightPanelView
+  quizTab: QuizTab
+  detectedActivityType: "quiz" | "missao" | null
+  userOverrideType: "quiz" | "missao" | null
+  currentQuestion: number
+}
+
+function loadPersistedSession(): PersistedSession | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<PersistedSession>
+      const messages = Array.isArray(parsed.messages)
+        ? parsed.messages.filter(
+            (message): message is ChatMessage =>
+              Boolean(message) &&
+              typeof message.id === "string" &&
+              (message.role === "ai" || message.role === "user") &&
+              typeof message.content === "string"
+          )
+        : []
+
+      if (messages.length > 0) {
+        const parsedActivity =
+          parsed.currentActivity == null
+            ? null
+            : activitySchema.safeParse(parsed.currentActivity)
+
+        return {
+          messages,
+          currentActivity:
+            parsedActivity && parsedActivity.success
+              ? parsedActivity.data
+              : null,
+          viewMode: parsed.viewMode === "creating" ? "creating" : "initial",
+          rightPanel: parsed.rightPanel === "preview" ? "preview" : "editor",
+          quizTab:
+            parsed.quizTab === "informacoes" ? "informacoes" : "questoes",
+          detectedActivityType:
+            parsed.detectedActivityType === "quiz" ||
+            parsed.detectedActivityType === "missao"
+              ? parsed.detectedActivityType
+              : null,
+          userOverrideType:
+            parsed.userOverrideType === "quiz" ||
+            parsed.userOverrideType === "missao"
+              ? parsed.userOverrideType
+              : null,
+          currentQuestion:
+            Number.isInteger(parsed.currentQuestion) &&
+            (parsed.currentQuestion ?? -1) >= 0
+              ? parsed.currentQuestion!
+              : 0,
+        }
+      }
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return null
+}
+
+function savePersistedSession(state: PersistedSession) {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("initial")
   const [rightPanel, setRightPanel] = useState<RightPanelView>("editor")
   const [quizTab, setQuizTab] = useState<QuizTab>("questoes")
   const [message, setMessage] = useState("")
-  const [messages, setMessages] = useState<ChatMessage[]>([welcomeMessage])
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    getWelcomeMessage(DEFAULT_LANGUAGE),
+  ])
   const [attachments, setAttachments] = useState<UploadedAttachment[]>([])
   const [generationState, setGenerationState] = useState<GenerationState>("idle")
   const [generationError, setGenerationError] = useState<UserFacingError | null>(null)
@@ -520,12 +585,14 @@ export default function HomePage() {
   })
   const [detectedActivityType, setDetectedActivityType] = useState<"quiz" | "missao" | null>(null)
   const [userOverrideType, setUserOverrideType] = useState<"quiz" | "missao" | null>(null)
+  const [language, setLanguage] = useState<SupportedLanguage>(DEFAULT_LANGUAGE)
   
   // Parametros opcionais de geracao
   const [selectedDifficulty, setSelectedDifficulty] = useState<string | null>(null)
   const [selectedQuestionCount, setSelectedQuestionCount] = useState<number | null>(null)
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false)
   const [advancedOptionsStage, setAdvancedOptionsStage] = useState(0)
+  const [hasLoadedPersistedSession, setHasLoadedPersistedSession] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
@@ -536,8 +603,8 @@ export default function HomePage() {
     (message.trim().length > 0 || attachments.length > 0)
 
   const initialConversationMessages = useMemo(
-    () => messages.filter((entry) => entry.id !== welcomeMessage.id).slice(-2),
-    [messages]
+    () => messages.filter((entry) => entry.id !== getWelcomeMessage(language).id).slice(-2),
+    [messages, language]
   )
   const latestClarificationVisible =
     generationState !== "loading" &&
@@ -551,11 +618,38 @@ export default function HomePage() {
     }
 
     setIsLocalDebugMode(isLocalDebugHost(window.location.hostname))
+    setLanguage(detectBrowserLanguage())
+
+    const persisted = loadPersistedSession()
+    if (persisted) {
+      setMessages(persisted.messages)
+      setCurrentActivity(persisted.currentActivity)
+      setViewMode(persisted.viewMode)
+      setRightPanel(persisted.rightPanel)
+      setQuizTab(persisted.quizTab)
+      setDetectedActivityType(persisted.detectedActivityType)
+      setUserOverrideType(persisted.userOverrideType)
+      setCurrentQuestion(persisted.currentQuestion)
+    }
+    setHasLoadedPersistedSession(true)
   }, [])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
   }, [messages])
+
+  useEffect(() => {
+    setMessages((previousMessages) => {
+      if (previousMessages.length === 1 && previousMessages[0].id === getWelcomeMessage(language).id) {
+        return [getWelcomeMessage(language)]
+      }
+      return previousMessages
+    })
+  }, [language])
+
+  useEffect(() => {
+    document.documentElement.lang = language
+  }, [language])
 
   useEffect(() => {
     if (!currentQuiz) {
@@ -574,6 +668,23 @@ export default function HomePage() {
       selectedAlternativeIndexes: {},
     })
   }, [currentActivity])
+
+  useEffect(() => {
+    if (!hasLoadedPersistedSession) {
+      return
+    }
+
+    savePersistedSession({
+      messages,
+      currentActivity,
+      viewMode,
+      rightPanel,
+      quizTab,
+      detectedActivityType,
+      userOverrideType,
+      currentQuestion,
+    })
+  }, [hasLoadedPersistedSession, messages, currentActivity, viewMode, rightPanel, quizTab, detectedActivityType, userOverrideType, currentQuestion])
 
   useEffect(() => {
     if (!showAdvancedOptions) {
@@ -663,6 +774,9 @@ export default function HomePage() {
     }
 
     const basePrompt = message.trim()
+    const detectedLanguage = detectLanguageFromPrompt(basePrompt)
+    setLanguage(detectedLanguage)
+    const strings = getStrings(detectedLanguage)
     
     // Constroi o prompt com os parametros selecionados
     const promptParts: string[] = [basePrompt]
@@ -699,7 +813,7 @@ export default function HomePage() {
             originalPrompt: pendingClarificationContext.originalPrompt,
             latestQuestion: pendingClarificationContext.latestQuestion,
             followUpPrompt: prompt,
-          })
+          }, detectedLanguage)
         : prompt
     
     setMessage("")
@@ -716,7 +830,7 @@ export default function HomePage() {
     const userMessage: ChatMessage = {
       id: createEntityId("message"),
       role: "user",
-      content: buildUserMessage(prompt, attachments),
+      content: buildUserMessage(prompt, attachments, detectedLanguage),
     }
     const pendingMessageId = createEntityId("message")
 
@@ -726,7 +840,7 @@ export default function HomePage() {
       {
         id: pendingMessageId,
         role: "ai",
-        content: "Gerando atividade com a IA...",
+        content: strings.generatingActivity,
       },
     ])
   setGenerationState("loading")
@@ -740,6 +854,7 @@ export default function HomePage() {
     try {
       const formData = new FormData()
       formData.append("prompt", requestPrompt)
+      formData.append("language", detectedLanguage)
       formData.append(
         "recentMessages",
         JSON.stringify(messages.slice(-6).map((entry) => ({
@@ -786,8 +901,8 @@ export default function HomePage() {
             setStreamingPreviewModel(streamEvent.data.model)
             setStreamingPreviewText((previousText) =>
               previousText.length > 0
-                ? `${previousText}\n\n---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug)} ----\n`
-                : `---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug)} ----\n`
+                ? `${previousText}\n\n---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug, detectedLanguage)} ----\n`
+                : `---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug, detectedLanguage)} ----\n`
             )
             break
           case "preview_delta":
@@ -857,7 +972,7 @@ export default function HomePage() {
         setStreamingPreviewModel(null)
         setStreamingPhase(null)
         const clarificationMessage =
-          resolvedPayload.assistantMessage ?? "Preciso de mais detalhes para continuar."
+          resolvedPayload.assistantMessage ?? strings.clarificationDefault
         setPendingClarificationContext((previousContext) => ({
           originalPrompt: previousContext?.originalPrompt ?? prompt,
           latestQuestion: clarificationMessage,
@@ -892,7 +1007,7 @@ export default function HomePage() {
         pendingMessageId,
         resolvedPayload.assistantMessage ?? generatedActivity.teacherMessage
       )
-      toast.success("Atividade gerada com sucesso.")
+      toast.success(strings.toastMessages.success)
       if (resolvedPayload.debug && isLocalDebugMode) {
         setShowDebugPanel(true)
       }
@@ -900,8 +1015,8 @@ export default function HomePage() {
       const errorMessage =
         error instanceof Error
           ? error.message
-          : "Nao foi possivel gerar a atividade no momento."
-      const normalizedError = normalizeUserFacingError(errorMessage)
+          : strings.userFacingErrors.defaultError.description
+      const normalizedError = normalizeUserFacingError(errorMessage, detectedLanguage)
 
       setGenerationState("error")
       setGenerationError(normalizedError)
@@ -971,6 +1086,29 @@ export default function HomePage() {
     setCurrentQuestion(0)
     setGenerationError(null)
     setCurrentModel(null)
+  }
+
+  const handleNewChat = () => {
+    localStorage.removeItem(STORAGE_KEY)
+    setMessages([getWelcomeMessage(language)])
+    setCurrentActivity(null)
+    setViewMode("initial")
+    setRightPanel("editor")
+    setCurrentQuestion(0)
+    setGenerationError(null)
+    setCurrentModel(null)
+    setDetectedActivityType(null)
+    setUserOverrideType(null)
+    setQuizTab("questoes")
+    setAttachments([])
+    setMessage("")
+    setPendingClarificationContext(null)
+    setStreamingPreviewText("")
+    setStreamingPreviewAttempt(null)
+    setStreamingPreviewModel(null)
+    setStreamingPhase(null)
+    setLatestGenerationDebug(null)
+    setShowDebugPanel(false)
   }
 
   const updateQuiz = (updater: (activity: QuizActivity) => QuizActivity) => {
@@ -1286,6 +1424,7 @@ export default function HomePage() {
         )
       )
       formData.append("currentActivity", JSON.stringify(baseActivity))
+      formData.append("language", language)
 
       const response = await fetch("/api/generate-activity", {
         method: "POST",
@@ -1315,8 +1454,8 @@ export default function HomePage() {
             setStreamingPreviewModel(streamEvent.data.model)
             setStreamingPreviewText((previousText) =>
               previousText.length > 0
-                ? `${previousText}\n\n---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug)} ----\n`
-                : `---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug)} ----\n`
+                ? `${previousText}\n\n---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug, language)} ----\n`
+                : `---- Tentativa ${streamEvent.data.attemptNumber} · ${getModelDisplayName(streamEvent.data.model, latestGenerationDebug, language)} ----\n`
             )
             break
           case "preview_delta":
@@ -1423,7 +1562,7 @@ export default function HomePage() {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Nao foi possivel editar a atividade no momento."
-      const normalizedError = normalizeUserFacingError(errorMessage)
+      const normalizedError = normalizeUserFacingError(errorMessage, language)
 
       setGenerationState("error")
       setGenerationError(normalizedError)
@@ -1574,7 +1713,7 @@ export default function HomePage() {
           ) : null}
           {streamingPreviewModel ? (
             <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-              {getModelDisplayName(streamingPreviewModel, latestGenerationDebug)}
+              {getModelDisplayName(streamingPreviewModel, latestGenerationDebug, language)}
             </span>
           ) : null}
         </div>
@@ -1762,7 +1901,7 @@ export default function HomePage() {
     const latestTokenCount = getLatestTokenCount(latestGenerationDebug)
     const handleCopyAllDebug = async () => {
       try {
-        await navigator.clipboard.writeText(formatDebugReport(latestGenerationDebug))
+        await navigator.clipboard.writeText(formatDebugReport(latestGenerationDebug, language))
         toast.success("Debug completo copiado para a area de transferencia.")
       } catch {
         toast.error("Nao foi possivel copiar o debug completo.")
@@ -2481,7 +2620,7 @@ export default function HomePage() {
                   />
                   <span className="hidden text-xs text-muted-foreground sm:inline">
                     {currentModel
-                      ? `Modelo ativo: ${getModelDisplayName(currentModel, latestGenerationDebug)}`
+                      ? `Modelo ativo: ${getModelDisplayName(currentModel, latestGenerationDebug, language)}`
                       : "IA conectada"}
                   </span>
                 </div>
@@ -3038,10 +3177,10 @@ export default function HomePage() {
                       <div className="mb-5 animate-fade-in-up">
                         <div className="mb-3 flex items-center justify-between text-xs font-semibold text-slate-500">
                           <span>
-                            Questao {quizPreviewState.currentIndex + 1} de {currentQuiz.quizQuestions.length}
+                            Questao {quizPreviewState.currentIndex + 1} de {currentQuiz?.quizQuestions.length ?? 0}
                           </span>
                           <span>
-                            {answeredPreviewQuestionsCount}/{currentQuiz.quizQuestions.length} respondidas
+                            {answeredPreviewQuestionsCount}/{currentQuiz?.quizQuestions.length ?? 0} respondidas
                           </span>
                         </div>
                         <div className="mb-4 rounded-xl bg-slate-50 p-4">
@@ -3088,10 +3227,10 @@ export default function HomePage() {
                           </div>
                         ) : null}
 
-                        {quizPreviewState.currentIndex === currentQuiz.quizQuestions.length - 1 ? (
+                        {quizPreviewState.currentIndex === (currentQuiz?.quizQuestions.length ?? 0) - 1 ? (
                           <div className="space-y-3">
                             <div className="rounded-xl bg-slate-900 px-4 py-3 text-sm text-white">
-                              Resultado parcial: {previewCorrectAnswersCount} de {currentQuiz.quizQuestions.length} acertos
+                              Resultado parcial: {previewCorrectAnswersCount} de {currentQuiz?.quizQuestions.length ?? 0} acertos
                             </div>
                             <button
                               type="button"
@@ -3195,6 +3334,20 @@ export default function HomePage() {
       <div className="flex h-screen flex-col overflow-hidden bg-background">
         <div className="flex min-h-0 flex-1">
           <div className="flex w-[390px] flex-col border-r border-border bg-card">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-primary" />
+                <span className="text-sm font-semibold">Assistente de Atividades</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleNewChat}
+                title="Nova conversa"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
             <div className="flex-1 overflow-auto p-4">
               <div className="flex flex-col gap-4">
                 {messages.map((entry, index) => (

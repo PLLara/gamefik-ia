@@ -493,40 +493,47 @@ export const activityOperationJsonSchema = {
   ],
 }
 
-const activityGenerationLiteJsonSchema = {
+const activityGenerationExecutorJsonSchema = {
   type: "object",
+  description: "Atividade educacional gerada pelo professor. Use type=quiz para quizzes com perguntas e alternativas. Use type=missao para missões com entrega de comprovante.",
   properties: {
-    type: { type: "string" },
-    title: { type: "string" },
-    description: { type: "string" },
-    teacherMessage: { type: "string" },
+    type: { type: "string", enum: ["quiz", "missao"], description: "Tipo da atividade: 'quiz' para questionario ou 'missao' para tarefa com entrega" },
+    title: { type: "string", description: "Titulo da atividade (obrigatorio)" },
+    description: { type: "string", description: "Descricao da atividade (obrigatorio)" },
+    teacherMessage: { type: "string", description: "Mensagem/instrucoes que o professor podera publicar para os alunos (obrigatorio)" },
     attachmentContext: {
       type: "array",
+      description: "Contexto extra extraido dos anexos (opcional)",
       items: { type: "string" },
     },
     quizQuestions: {
       type: "array",
+      description: "Obrigatorio quando type='quiz'. Lista de questoes com alternativas.",
       items: {
         type: "object",
         properties: {
-          enunciado: { type: "string" },
-          points: { type: "number" },
+          enunciado: { type: "string", description: "Texto da pergunta" },
+          points: { type: "number", description: "Pontos da questao (ex: 10)" },
           alternatives: {
             type: "array",
+            description: "Alternativas de resposta (minimo 2, maximo 6). Exatamente uma deve ter correct=true.",
             items: {
               type: "object",
               properties: {
-                text: { type: "string" },
-                correct: { type: "boolean" },
+                text: { type: "string", description: "Texto da alternativa" },
+                correct: { type: "boolean", description: "true se for a alternativa correta; apenas uma pode ser true" },
               },
+              required: ["text", "correct"],
             },
           },
         },
+        required: ["enunciado", "alternatives", "points"],
       },
     },
-    missionProofType: { type: "string" },
-    missionValidation: { type: "string" },
+    missionProofType: { type: "string", enum: ["foto", "video", "texto", "arquivo"], description: "Obrigatorio quando type='missao'. Tipo de comprovante que o aluno deve enviar." },
+    missionValidation: { type: "string", enum: ["ia", "manual", "auto"], description: "Obrigatorio quando type='missao'. Quem valida a entrega: ia (inteligencia artificial), manual (professor) ou auto (autoavaliacao)." },
   },
+  required: ["type", "title", "description", "teacherMessage"],
 }
 
 export function getActivityOperationJsonSchema(
@@ -541,7 +548,7 @@ export function getActivityOperationJsonSchema(
           payload: {
             type: "object",
             properties: {
-              activity: activityGenerationLiteJsonSchema,
+              activity: activityGenerationExecutorJsonSchema,
             },
             required: ["activity"],
           },

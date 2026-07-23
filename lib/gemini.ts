@@ -95,7 +95,18 @@ export async function getGeminiClient() {
   return cachedClient
 }
 
+function assertModelIsGemini(model: string) {
+  if (/^(gpt-|o\d|chatgpt-|claude-|llama-)/i.test(model)) {
+    throw new Error(
+      `Modelo "${model}" não é do Gemini. ` +
+        `Defina GEMINI_MODEL com um modelo Gemini (ex: gemini-2.5-flash).`
+    )
+  }
+}
+
 export function getGeminiThinkingConfig(model: string) {
+  assertModelIsGemini(model)
+
   // Alguns modelos Pro exigem thinking habilitado e rejeitam budget zero.
   if (/gemini-3\.1-pro/i.test(model)) {
     return undefined

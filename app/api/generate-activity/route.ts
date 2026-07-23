@@ -5,6 +5,7 @@ import { orchestrateActivityOperation, type OrchestrationEvent } from "@/lib/act
 import { activitySchema } from "@/lib/activity-schema"
 import { type GenerationDebugPayload } from "@/lib/generation-debug"
 import { GEMINI_API_VERSION, GEMINI_MODEL } from "@/lib/gemini"
+import { DEFAULT_LANGUAGE, getStrings, type SupportedLanguage } from "@/lib/i18n"
 
 export const runtime = "nodejs"
 
@@ -197,11 +198,13 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData()
     const prompt = formData.get("prompt")
+    const language = (typeof formData.get("language") === "string" ? formData.get("language") : DEFAULT_LANGUAGE) as SupportedLanguage
     const files = formData.getAll("attachments").filter((value): value is File => value instanceof File)
     const normalizedPrompt = typeof prompt === "string" ? prompt.trim() : ""
     const currentActivity = parseJsonField(formData.get("currentActivity"), activitySchema)
     const recentMessages =
       parseJsonField(formData.get("recentMessages"), recentMessagesSchema) ?? []
+    const strings = getStrings(language)
 
     if (debugPayload) {
       debugPayload.attachmentSummary = files.map((file) => ({
@@ -213,21 +216,21 @@ export async function POST(request: Request) {
 
     if (!normalizedPrompt && files.length === 0) {
       return buildJsonResponse(
-        { error: "Descreva a atividade ou envie ao menos um anexo." },
+        { error: strings.emptyPromptError },
         400,
         debugPayload,
         startedAtMs,
-        { finalError: "Descreva a atividade ou envie ao menos um anexo." }
+        { finalError: strings.emptyPromptError }
       )
     }
 
     if (files.length > MAX_ATTACHMENT_COUNT) {
       return buildJsonResponse(
-        { error: `Envie no maximo ${MAX_ATTACHMENT_COUNT} anexos por vez.` },
+        { error: strings.tooManyAttachmentsError(MAX_ATTACHMENT_COUNT) },
         400,
         debugPayload,
         startedAtMs,
-        { finalError: `Envie no maximo ${MAX_ATTACHMENT_COUNT} anexos por vez.` }
+        { finalError: strings.tooManyAttachmentsError(MAX_ATTACHMENT_COUNT) }
       )
     }
 
@@ -236,21 +239,21 @@ export async function POST(request: Request) {
     for (const file of files) {
       if (!isAcceptedMimeType(file.type)) {
         return buildJsonResponse(
-          { error: `O arquivo "${file.name}" nao e suportado. Use apenas PDF ou imagem.` },
+          { error: strings.unsupportedFileError(file.name) },
           400,
           debugPayload,
           startedAtMs,
-          { finalError: `O arquivo "${file.name}" nao e suportado. Use apenas PDF ou imagem.` }
+          { finalError: strings.unsupportedFileError(file.name) }
         )
       }
 
       if (file.size > MAX_SINGLE_ATTACHMENT_BYTES) {
         return buildJsonResponse(
-          { error: `O arquivo "${file.name}" excede o limite de 8 MB.` },
+          { error: strings.fileTooLargeError(file.name) },
           400,
           debugPayload,
           startedAtMs,
-          { finalError: `O arquivo "${file.name}" excede o limite de 8 MB.` }
+          { finalError: strings.fileTooLargeError(file.name) }
         )
       }
 
@@ -259,11 +262,11 @@ export async function POST(request: Request) {
 
     if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
       return buildJsonResponse(
-        { error: "O total de anexos excede o limite de 14 MB por solicitacao." },
+        { error: strings.totalAttachmentsTooLargeError },
         400,
         debugPayload,
         startedAtMs,
-        { finalError: "O total de anexos excede o limite de 14 MB por solicitacao." }
+        { finalError: strings.totalAttachmentsTooLargeError }
       )
     }
 
@@ -282,6 +285,7 @@ export async function POST(request: Request) {
         attachmentParts,
         recentMessages,
         debugPayload,
+        language,
       })
 
       return buildJsonResponse(
@@ -333,6 +337,7 @@ export async function POST(request: Request) {
             attachmentParts,
             recentMessages,
             debugPayload,
+            language,
             emit,
           })
 

@@ -1,3 +1,5 @@
+import { type SupportedLanguage } from "@/lib/i18n"
+
 export type AttachmentDescriptor = {
   name: string
   mimeType: string
@@ -7,10 +9,25 @@ export type AttachmentDescriptor = {
 type BuildActivityPromptOptions = {
   userPrompt: string
   attachments: AttachmentDescriptor[]
+  language: SupportedLanguage
 }
 
-export const activityGenerationSystemInstruction = `
-Voce e um assistente especialista em criar atividades educacionais em portugues do Brasil.
+function getLanguageInstruction(language: SupportedLanguage): string {
+  switch (language) {
+    case "en-US":
+      return "Always respond in English (US)."
+    case "es-ES":
+      return "Siempre responda en espanol."
+    case "pt-BR":
+    default:
+      return "Sempre responda em portugues do Brasil."
+  }
+}
+
+export function getActivityGenerationSystemInstruction(language: SupportedLanguage): string {
+  const langInstruction = getLanguageInstruction(language)
+  return `
+Voce e um assistente especialista em criar atividades educacionais.
 
 Objetivo:
 - transformar o pedido do professor em uma atividade pronta para uso;
@@ -19,7 +36,7 @@ Objetivo:
 - gerar conteudo pedagogico, claro, correto e adequado para sala de aula.
 
 Regras obrigatorias:
-- sempre responda em portugues do Brasil;
+- ${langInstruction}
 - se o pedido indicar avaliacao objetiva, perguntas, revisao de conteudo ou multipla escolha, prefira "quiz";
 - se o pedido indicar tarefa pratica, entrega, leitura, pesquisa, producao ou evidencia, prefira "missao";
 - use exatamente o campo "type" com valor "quiz" ou "missao";
@@ -37,6 +54,7 @@ Regras obrigatorias:
 - nunca use nomes alternativos como "activityType", "questions", "questionText" ou "correctAlternative";
 - nunca invente campos fora do schema.
 `.trim()
+}
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) {
@@ -53,6 +71,7 @@ function formatBytes(bytes: number) {
 export function buildActivityPrompt({
   userPrompt,
   attachments,
+  language,
 }: BuildActivityPromptOptions) {
   const normalizedPrompt = userPrompt.trim()
 
@@ -64,12 +83,27 @@ export function buildActivityPrompt({
               `${index + 1}. ${attachment.name} (${attachment.mimeType}, ${formatBytes(attachment.size)})`
           )
           .join("\n")
+      : language === "en-US"
+      ? "No attachments sent."
+      : language === "es-ES"
+      ? "No se enviaron adjuntos."
       : "Nenhum anexo enviado."
 
   const promptSection =
     normalizedPrompt.length > 0
       ? normalizedPrompt
+      : language === "en-US"
+      ? "No text was provided. Use only the context of the attachments to create the activity."
+      : language === "es-ES"
+      ? "No se proporciono texto. Use solo el contexto de los adjuntos para crear la actividad."
       : "Nao foi fornecido texto. Use apenas o contexto dos anexos para criar a atividade."
+
+  const finalInstructions =
+    language === "en-US"
+      ? "- use attachments as a source of context whenever it makes sense;\n- if the request is vague, make sensible and pedagogical decisions;\n- keep the result ready for immediate use in a school app;\n- respond only with the final JSON."
+      : language === "es-ES"
+      ? "- use los adjuntos como fuente de contexto siempre que tenga sentido;\n- si la solicitud es vaga, tome decisiones sensatas y pedagogicas;\n- mantenga el resultado listo para uso inmediato en una app escolar;\n- responda solo con el JSON final."
+      : "- use os anexos como fonte de contexto sempre que fizer sentido;\n- se o pedido estiver vago, tome decisoes sensatas e pedagogicas;\n- mantenha o resultado pronto para uso imediato em um app escolar;\n- responda apenas com o JSON final."
 
   return `
 Crie uma atividade educacional completa seguindo o schema solicitado.
@@ -81,9 +115,6 @@ Anexos recebidos:
 ${attachmentSection}
 
 Instrucoes finais:
-- use os anexos como fonte de contexto sempre que fizer sentido;
-- se o pedido estiver vago, tome decisoes sensatas e pedagogicas;
-- mantenha o resultado pronto para uso imediato em um app escolar;
-- responda apenas com o JSON final.
+${finalInstructions}
 `.trim()
 }
