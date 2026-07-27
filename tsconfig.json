@@ -8,6 +8,7 @@
     "allowJs": true,
     "target": "ES6",
     "skipLibCheck": true,
+    "noUncheckedSideEffectImports": false,
     "strict": true,
     "noEmit": true,
     "esModuleInterop": true,
@@ -17,16 +18,12 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
     "paths": {
       "@/*": [
         "./*"
       ]
-    }
+    },
+    "types": ["*"]
   },
   "include": [
     "next-env.d.ts",

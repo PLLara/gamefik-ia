@@ -19,7 +19,7 @@ Protótipo/laboratório de UX para **criação de atividades com IA**: uma únic
 ```bash
 npm run dev        # next dev
 npm run build      # next build
-npm run lint       # eslint .
+npm run lint       # oxlint
 npm run typecheck  # tsc --noEmit
 ```
 
